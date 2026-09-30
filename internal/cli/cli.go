@@ -109,7 +109,7 @@ Environment:
 	_ = *verbose || *verboseLong
 
 	noMkt := *noMarketing || envTruthy("OMNI_AUDIT_NO_MARKETING")
-	failAny := true
+	var failAny bool
 	switch strings.ToLower(*failOn) {
 	case "any":
 		failAny = true
