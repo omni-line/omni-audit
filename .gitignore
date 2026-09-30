@@ -1,0 +1,22 @@
+# Binaries
+/bin/
+/dist/
+/omni-audit
+*.exe
+*.test
+*.out
+
+# Go
+/vendor/
+coverage.out
+coverage.html
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local env
+.env
+.env.*

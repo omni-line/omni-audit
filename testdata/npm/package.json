@@ -1,0 +1,11 @@
+{
+  "name": "fixture-npm",
+  "dependencies": {
+    "lodash": "^4.17.21",
+    "@acme/internal-utils": "1.0.0",
+    "omni-audit-definitely-unclaimed-pkg-zz9": "1.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

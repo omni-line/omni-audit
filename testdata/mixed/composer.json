@@ -1,0 +1,6 @@
+{
+  "require": {
+    "symfony/http-foundation": "^6.0",
+    "corp/private-php": "^2.0"
+  }
+}

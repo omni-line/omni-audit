@@ -1,0 +1,7 @@
+{
+  "name": "mixed-app",
+  "dependencies": {
+    "left-pad": "1.3.0",
+    "@corp/private-lib": "0.1.0"
+  }
+}
