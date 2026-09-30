@@ -1,0 +1,2 @@
+requests>=2.28.0
+acme-internal-sdk==0.1.0

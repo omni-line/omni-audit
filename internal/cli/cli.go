@@ -13,6 +13,7 @@ import (
 	"github.com/omni-line/omni-audit/internal/match"
 	regnpm "github.com/omni-line/omni-audit/internal/registry/npm"
 	"github.com/omni-line/omni-audit/internal/registry/packagist"
+	regpypi "github.com/omni-line/omni-audit/internal/registry/pypi"
 	"github.com/omni-line/omni-audit/internal/report"
 	"github.com/omni-line/omni-audit/internal/scan"
 	"github.com/omni-line/omni-audit/internal/version"
@@ -62,7 +63,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, `Usage: omni-audit [path] [flags]
 
-Scan a project tree for dependency confusion risks (NPM and Composer).
+Scan a project tree for dependency confusion risks (NPM, Composer, and PyPI).
 Unclaimed names on public registries are reported as findings.
 
 `)
@@ -147,6 +148,7 @@ Environment:
 		Concurrency:    *concurrency,
 		NPM:            regnpm.New(httpClient, ua),
 		Composer:       packagist.New(httpClient, ua),
+		PyPI:           regpypi.New(httpClient, ua),
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)

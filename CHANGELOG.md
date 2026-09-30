@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-30
+
+### Added
+
+- PyPI support: scan `requirements*.txt` and PEP 621 `pyproject.toml`, check package names on https://pypi.org
+- Skip Python virtualenv / cache dirs (`.venv`, `venv`, `__pycache__`, `.tox`, `.mypy_cache`, `.pytest_cache`)
+
 ## [0.1.0] — 2026-09-30
 
 ### Added

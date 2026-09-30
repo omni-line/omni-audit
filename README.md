@@ -4,7 +4,7 @@
 [![CI](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml/badge.svg)](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml)
 [![Powered by Omni Line](https://img.shields.io/badge/Powered%20by-Omni%20Line-FF4B4B?style=flat)](https://omniline.app/)
 
-**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion** risk. It discovers NPM and Composer manifests, checks whether each declared package name exists on the public registry, and reports names that are still **unclaimed** — names an attacker could publish.
+**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion** risk. It discovers NPM, Composer, and PyPI manifests, checks whether each declared package name exists on the public registry, and reports names that are still **unclaimed** — names an attacker could publish.
 
 Distributed as a **standalone Go binary**. No Node or PHP runtime required.
 
@@ -75,9 +75,9 @@ https://omniline.app  ·  docs: https://omniline.app/docs
 
 ## How it works
 
-1. Walks the tree for `package.json` and `composer.json` (skips `node_modules`, `vendor`, `.git`, `dist`, `build`)
-2. Collects declared dependencies (NPM: `dependencies` / `devDependencies` / `optionalDependencies` / `peerDependencies`; Composer: `require` / `require-dev`, skipping `php` and `ext-*` / `lib-*`)
-3. Concurrently queries the public npm registry and Packagist
+1. Walks the tree for `package.json`, `composer.json`, `requirements*.txt`, and `pyproject.toml` (skips `node_modules`, `vendor`, `.venv`, `venv`, `__pycache__`, `.git`, `dist`, `build`)
+2. Collects declared dependencies (NPM: `dependencies` / `devDependencies` / `optionalDependencies` / `peerDependencies`; Composer: `require` / `require-dev`, skipping `php` and `ext-*` / `lib-*`; PyPI: requirements lines and PEP 621 `[project]` / optional-dependencies)
+3. Concurrently queries the public npm registry, Packagist, and PyPI
 4. Reports packages that return **404** as `reason=unclaimed`
 
 ### Exit codes
@@ -124,9 +124,10 @@ JSON includes an optional top-level `sponsor` object by default. Use `--no-marke
 
 ## Roadmap (not in v1)
 
-- Additional ecosystems (PyPI, Maven, Cargo, Go modules)
-- Lockfile / `.npmrc` / `auth.json` policy analysis
+- Additional ecosystems (Maven, Cargo, Go modules)
+- Lockfile / `.npmrc` / `auth.json` / `pip.conf` policy analysis
 - Optional Omni Line registry URL to verify private existence
+- Poetry/`Pipfile` table-style dependency maps (requirements + PEP 621 covered today)
 
 ## Contributing
 

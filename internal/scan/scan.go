@@ -3,11 +3,14 @@ package scan
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/omni-line/omni-audit/internal/discover"
 	"github.com/omni-line/omni-audit/internal/manifest/composer"
 	"github.com/omni-line/omni-audit/internal/manifest/npm"
+	"github.com/omni-line/omni-audit/internal/manifest/pypi"
 	"github.com/omni-line/omni-audit/internal/match"
 	"github.com/omni-line/omni-audit/internal/registry"
 )
@@ -52,6 +55,7 @@ type Options struct {
 	Concurrency    int
 	NPM            registry.Checker
 	Composer       registry.Checker
+	PyPI           registry.Checker
 }
 
 type job struct {
@@ -73,8 +77,8 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 	if opts.Concurrency <= 0 {
 		opts.Concurrency = 16
 	}
-	if opts.NPM == nil || opts.Composer == nil {
-		return nil, fmt.Errorf("npm and composer registry checkers are required")
+	if opts.NPM == nil || opts.Composer == nil || opts.PyPI == nil {
+		return nil, fmt.Errorf("npm, composer, and pypi registry checkers are required")
 	}
 
 	manifests, err := discover.Walk(root)
@@ -111,6 +115,20 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 					version:   d.Version,
 					manifest:  m.Path,
 					checker:   opts.Composer,
+				})
+			}
+		case "pypi":
+			deps, err := parsePythonManifest(m.Path)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", m.Path, err)
+			}
+			for _, d := range deps {
+				jobs = append(jobs, job{
+					ecosystem: "pypi",
+					name:      d.Name,
+					version:   d.Version,
+					manifest:  m.Path,
+					checker:   opts.PyPI,
 				})
 			}
 		}
@@ -218,4 +236,16 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 		return res, err
 	}
 	return res, nil
+}
+
+func parsePythonManifest(path string) ([]pypi.Dependency, error) {
+	base := strings.ToLower(filepath.Base(path))
+	switch {
+	case base == "pyproject.toml":
+		return pypi.ParsePyProjectFile(path)
+	case strings.HasPrefix(base, "requirements") && strings.HasSuffix(base, ".txt"):
+		return pypi.ParseRequirementsFile(path)
+	default:
+		return pypi.ParseRequirementsFile(path)
+	}
 }

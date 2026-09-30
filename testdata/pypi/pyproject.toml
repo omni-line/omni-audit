@@ -1,0 +1,11 @@
+[project]
+name = "fixture-pypi"
+dependencies = [
+  "urllib3>=2.0",
+  "corp-private-lib==1.2.3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0",
+]

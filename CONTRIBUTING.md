@@ -60,7 +60,7 @@ This adds a `Signed-off-by:` trailer. See https://developercertificate.org/.
 | --- | --- |
 | `cmd/omni-audit` | CLI entrypoint |
 | `internal/discover` | Manifest discovery |
-| `internal/manifest` | NPM / Composer parsers |
+| `internal/manifest` | NPM / Composer / PyPI parsers |
 | `internal/registry` | Public registry clients |
 | `internal/scan` | Orchestration |
 | `internal/report` | Text / JSON output and marketing |
