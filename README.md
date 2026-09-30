@@ -4,13 +4,13 @@
 [![CI](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml/badge.svg)](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml)
 [![Powered by Omni Line](https://img.shields.io/badge/Powered%20by-Omni%20Line-FF4B4B?style=flat)](https://omniline.app/)
 
-**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion** risk. It discovers NPM, Composer, and PyPI manifests, checks whether each declared package name exists on the public registry, and reports names that are still **unclaimed** — names an attacker could publish.
+**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion** risk. It discovers NPM, Composer, PyPI, and Go manifests, checks whether each declared package name exists on the public registry, and reports names that are still **unclaimed** — names an attacker could publish.
 
 Distributed as a **standalone Go binary**. No Node or PHP runtime required.
 
 ## The problem
 
-If your team uses private packages alongside public registries (npmjs.com, Packagist, PyPI), a build can resolve a **malicious public package** that reuses an internal name. Omni Audit flags unclaimed public names before they are hijacked.
+If your team uses private packages alongside public registries (npmjs.com, Packagist, PyPI, proxy.golang.org), a build can resolve a **malicious public package** that reuses an internal name. Omni Audit flags unclaimed public names before they are hijacked.
 
 Auditing is the first step. [Omni Line](https://omniline.app) is the durable fix: a self-hosted registry that routes internal packages correctly across ecosystems.
 
@@ -91,12 +91,13 @@ https://omniline.app  ·  docs: https://omniline.app/docs
 
 ## How it works
 
-1. Walks the tree for `package.json`, `composer.json`, `requirements*.txt`, `requirements/*.txt`, and `pyproject.toml` (skips `node_modules`, `vendor`, `.venv`, `venv`, `__pycache__`, `.git`, `dist`, `build`, and other dependency/cache dirs, plus anything matched by `--exclude`)
+1. Walks the tree for `package.json`, `composer.json`, `requirements*.txt`, `requirements/*.txt`, `pyproject.toml`, and `go.mod` (skips `node_modules`, `vendor`, `.venv`, `venv`, `__pycache__`, `.git`, `dist`, `build`, and other dependency/cache dirs, plus anything matched by `--exclude`)
 2. Collects declared dependencies with their section and line number:
    - **npm**: `dependencies` / `devDependencies` / `optionalDependencies` / `peerDependencies`. Local and VCS specs (`file:`, `workspace:`, `link:`, git URLs, `user/repo`) are skipped; aliases (`npm:real-pkg@^1`) are checked under the real name.
    - **Composer**: `require` / `require-dev`, skipping platform packages (`php`, `ext-*`, `lib-*`, `composer-plugin-api`, …).
    - **PyPI**: requirements files (comments, markers, extras, line continuations) and `pyproject.toml` PEP 621 `[project]` dependencies / optional-dependencies plus PEP 735 `[dependency-groups]`. Names are compared using PEP 503 normalization.
-3. Checks each distinct name once per ecosystem against the public npm registry, Packagist, and PyPI using lightweight `HEAD` requests, with retries and backoff for rate limits and transient errors
+   - **Go**: `require` directives in `go.mod` (including `// indirect`). Paths must look like public module paths (first element contains a `.`). Checked via `proxy.golang.org`.
+3. Checks each distinct name once per ecosystem against the public npm registry, Packagist, PyPI, and the Go module proxy using lightweight `HEAD` requests, with retries and backoff for rate limits and transient errors
 4. Reports names that return **404** as `reason=unclaimed`; checks that fail are reported as warnings, never as clean
 
 ### Security properties
@@ -192,10 +193,10 @@ GitHub code scanning (findings appear as alerts with file/line annotations):
 
 Run from the repository root so SARIF paths are repository-relative.
 
-## Roadmap (not in v1)
+## Roadmap
 
-- Additional ecosystems (Maven, Cargo, Go modules)
-- Lockfile / `.npmrc` / `auth.json` / `pip.conf` policy analysis
+- Additional ecosystems (Maven, Cargo)
+- Lockfile / `.npmrc` / `auth.json` / `pip.conf` / `GOPRIVATE` policy analysis
 - Optional Omni Line registry URL to verify private existence
 - Poetry/`Pipfile` table-style dependency maps (requirements + PEP 621 covered today)
 

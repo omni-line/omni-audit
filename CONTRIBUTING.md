@@ -62,8 +62,8 @@ This adds a `Signed-off-by:` trailer. See https://developercertificate.org/.
 | `internal/cli` | Flags, validation, signal handling |
 | `internal/ecosystem` | Binds each manifest format to its registry (the only place ecosystems are registered) |
 | `internal/discover` | Manifest discovery (ecosystem-agnostic) |
-| `internal/manifest` | Shared `Dependency` type, safe file reads; parsers in `npm/`, `composer/`, `pypi/` |
-| `internal/registry` | `Checker` interface and the shared HTTP `Prober` (HEAD, retries, redirects); clients in `npm/`, `packagist/`, `pypi/` |
+| `internal/manifest` | Shared `Dependency` type, safe file reads; parsers in `npm/`, `composer/`, `pypi/`, `gomod/` |
+| `internal/registry` | `Checker` interface and the shared HTTP `Prober` (HEAD, retries, redirects); clients in `npm/`, `packagist/`, `pypi/`, `goproxy/` |
 | `internal/scan` | Orchestration: dedupes checks, runs the worker pool |
 | `internal/report` | Text / JSON / SARIF output, exit codes, marketing |
 | `testdata` | Fixtures |

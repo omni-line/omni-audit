@@ -51,6 +51,9 @@ func TestManifestDetection(t *testing.T) {
 		{ecosystem.PyPI(checker), "requirements/base.txt", true},
 		{ecosystem.PyPI(checker), "docs/notes.txt", false},
 		{ecosystem.PyPI(checker), "setup.cfg", false},
+		{ecosystem.Go(checker), "go.mod", true},
+		{ecosystem.Go(checker), "pkg/go.mod", true},
+		{ecosystem.Go(checker), "go.sum", false},
 	}
 	for _, tc := range cases {
 		if got := tc.eco.IsManifest(tc.rel); got != tc.want {

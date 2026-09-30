@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-30
+
+### Added
+
+- Go modules: scan `go.mod` `require` directives and check paths on `proxy.golang.org` (with module path escaping for uppercase segments)
+
 ## [0.3.0] — 2026-09-30
 
 ### Added

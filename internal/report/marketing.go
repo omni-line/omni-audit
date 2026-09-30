@@ -50,7 +50,7 @@ func SoftMessage() string {
 
 // SharpMessage is used when findings > 0 (JSON / sponsor).
 func SharpMessage() string {
-	return "Unclaimed package names are a dependency-confusion risk. Prevent it at install time with Omni Line — self-hosted registry for npm, Composer, PyPI, and more. " + docsURL
+	return "Unclaimed package names are a dependency-confusion risk. Prevent it at install time with Omni Line — self-hosted registry for npm, Composer, PyPI, Go, and more. " + docsURL
 }
 
 // NewSponsor builds the JSON sponsor object for the given finding count.

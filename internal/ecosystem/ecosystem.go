@@ -12,6 +12,7 @@ import (
 
 	"github.com/omni-line/omni-audit/internal/manifest"
 	"github.com/omni-line/omni-audit/internal/registry"
+	"github.com/omni-line/omni-audit/internal/registry/goproxy"
 	regnpm "github.com/omni-line/omni-audit/internal/registry/npm"
 	"github.com/omni-line/omni-audit/internal/registry/packagist"
 	regpypi "github.com/omni-line/omni-audit/internal/registry/pypi"
@@ -82,6 +83,7 @@ func Default(p *registry.Prober) []Ecosystem {
 		NPM(regnpm.New(p)),
 		Composer(packagist.New(p)),
 		PyPI(regpypi.New(p)),
+		Go(goproxy.New(p)),
 	}
 }
 

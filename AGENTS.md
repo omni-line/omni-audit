@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**Omni Audit** (`omni-audit`) is a Go CLI that detects dependency-confusion risk for **NPM**, **Composer**, and **PyPI** by flagging package names that are unclaimed on public registries. It is an open-source project backed by [Omni Line](https://omniline.app).
+**Omni Audit** (`omni-audit`) is a Go CLI that detects dependency-confusion risk for **NPM**, **Composer**, **PyPI**, and **Go modules** by flagging package names that are unclaimed on public registries. It is an open-source project backed by [Omni Line](https://omniline.app).
 
 Module: `github.com/omni-line/omni-audit` · Binary: `cmd/omni-audit` → `omni-audit`
 
@@ -29,8 +29,8 @@ Requires Go **1.20+** (CI tests 1.20 and 1.22; releases use latest stable). Do n
 | `internal/cli` | Flags, validation, signals |
 | `internal/ecosystem` | Registers ecosystems (manifest detection + parser + registry checker) |
 | `internal/discover` | Manifest walk (ecosystem-agnostic) |
-| `internal/manifest` | Shared `Dependency`, safe `ReadFile`; parsers in `{npm,composer,pypi}` |
-| `internal/registry` | `Checker`, shared HTTP `Prober`; clients in `{npm,packagist,pypi}` |
+| `internal/manifest` | Shared `Dependency`, safe `ReadFile`; parsers in `{npm,composer,pypi,gomod}` |
+| `internal/registry` | `Checker`, shared HTTP `Prober`; clients in `{npm,packagist,pypi,goproxy}` |
 | `internal/scan` | Orchestration, check dedupe, worker pool |
 | `internal/report` | Text/JSON/SARIF output, exit codes, colors, marketing |
 | `internal/match` | Glob allowlists |
@@ -53,7 +53,7 @@ ecosystem-specific branches to `discover`, `scan`, or `report`.
 
 ## Out of scope (unless asked)
 
-Maven/Cargo/Go ecosystems, Poetry/`Pipfile` table maps, lockfile/`.npmrc` policy analysis, Omni Line API integration, or cutting release tags without an explicit request.
+Maven/Cargo, Poetry/`Pipfile` table maps, lockfile/`.npmrc`/`GOPRIVATE` policy analysis, Omni Line API integration, or cutting release tags without an explicit request.
 
 ## Docs
 
