@@ -1,9 +1,41 @@
 linters:
   enable:
+    - bodyclose
     - errcheck
+    - errorlint
+    - gocritic
+    - gosec
     - govet
     - ineffassign
+    - misspell
+    - noctx
+    - nolintlint
+    - revive
     - staticcheck
+    - unconvert
+    - unparam
     - unused
+
+linters-settings:
+  gosec:
+    excludes:
+      - G104 # duplicate of errcheck
+  nolintlint:
+    require-explanation: true
+    require-specific: true
+  revive:
+    rules:
+      - name: exported
+        disabled: true # internal packages; doc comments are encouraged, not enforced
+      - name: package-comments
+        disabled: true
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+        - unparam
+
 run:
   timeout: 5m

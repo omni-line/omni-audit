@@ -1,22 +1,30 @@
+// Package cli implements the omni-audit command line.
 package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/omni-line/omni-audit/internal/ecosystem"
 	"github.com/omni-line/omni-audit/internal/match"
-	regnpm "github.com/omni-line/omni-audit/internal/registry/npm"
-	"github.com/omni-line/omni-audit/internal/registry/packagist"
-	regpypi "github.com/omni-line/omni-audit/internal/registry/pypi"
+	"github.com/omni-line/omni-audit/internal/registry"
 	"github.com/omni-line/omni-audit/internal/report"
 	"github.com/omni-line/omni-audit/internal/scan"
 	"github.com/omni-line/omni-audit/internal/version"
+)
+
+// Flag bounds.
+const (
+	maxConcurrency = 256
+	maxRetries     = 10
 )
 
 // stringList accumulates repeatable or comma-separated flag values.
@@ -28,186 +36,250 @@ func (s *stringList) String() string {
 
 func (s *stringList) Set(v string) error {
 	for _, part := range strings.Split(v, ",") {
-		part = strings.TrimSpace(part)
-		if part != "" {
+		if part = strings.TrimSpace(part); part != "" {
 			*s = append(*s, part)
 		}
 	}
 	return nil
 }
 
-// Run executes the CLI and returns a process exit code.
+type config struct {
+	root        string
+	format      report.Format
+	color       report.ColorMode
+	timeout     time.Duration
+	concurrency int
+	retries     int
+	failAny     bool
+	strict      bool
+	quiet       bool
+	verbose     bool
+	noMarketing bool
+	forceMarket bool
+	safeNS      *match.Matcher
+	ignore      *match.Matcher
+	exclude     *match.Matcher
+}
+
+// errHelp signals that usage was printed on request.
+var errHelp = errors.New("help requested")
+
+// Run executes the CLI and returns a process exit code. SIGINT and SIGTERM
+// cancel in-flight registry checks.
 func Run(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("omni-audit", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return run(ctx, args, stdout, stderr)
+}
 
-	var (
-		format      = fs.String("format", "text", "output format: text|json")
-		timeout     = fs.Duration("timeout", 5*time.Second, "per-request registry timeout")
-		concurrency = fs.Int("concurrency", 16, "parallel registry checks")
-		failOn      = fs.String("fail-on", "any", "when to exit 1: any|none")
-		colorMode   = fs.String("color", "auto", "color output: auto|always|never")
-		quiet       = fs.Bool("q", false, "findings only; suppress banner and marketing")
-		quietLong   = fs.Bool("quiet", false, "alias for -q")
-		noMarketing = fs.Bool("no-marketing", false, "hide Omni Line CTA / JSON sponsor")
-		forceMarket = fs.Bool("marketing", false, "force marketing even when non-TTY")
-		verbose     = fs.Bool("v", false, "verbose warnings")
-		verboseLong = fs.Bool("verbose", false, "alias for -v")
-		showVersion = fs.Bool("version", false, "print version and exit")
-		safeNS      stringList
-		ignore      stringList
-	)
-	fs.Var(&safeNS, "safe-namespace", "glob of known-safe namespaces (repeatable or comma-separated)")
-	fs.Var(&ignore, "ignore", "package name globs to skip (repeatable or comma-separated)")
-
-	fs.Usage = func() {
-		fmt.Fprintf(stderr, `Usage: omni-audit [path] [flags]
-
-Scan a project tree for dependency confusion risks (NPM, Composer, and PyPI).
-Unclaimed names on public registries are reported as findings.
-
-`)
-		fs.PrintDefaults()
-		fmt.Fprintf(stderr, `
-Exit codes:
-  0  no findings (or fail-on=none)
-  1  findings reported
-  2  usage or runtime error
-
-Environment:
-  OMNI_AUDIT_NO_MARKETING=1  same as --no-marketing
-  NO_COLOR=1                 disable ANSI colors (also --color never)
-  FORCE_COLOR=1              enable colors even when non-TTY
-`)
-	}
-
-	flagArgs, positional, err := splitArgs(args)
-	if err != nil {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	cfg, showVersion, err := parse(args, stderr)
+	switch {
+	case errors.Is(err, errHelp):
+		return report.ExitOK
+	case err != nil:
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return report.ExitError
-	}
-
-	if err := fs.Parse(flagArgs); err != nil {
-		return report.ExitError
-	}
-
-	if *showVersion {
-		fmt.Fprintln(stdout, version.Version)
+	case showVersion:
+		fmt.Fprintln(stdout, version.String())
 		return report.ExitOK
 	}
 
-	root := "."
-	if len(positional) > 1 {
-		fmt.Fprintln(stderr, "error: too many path arguments")
-		fs.Usage()
-		return report.ExitError
-	}
-	if len(positional) == 1 {
-		root = positional[0]
-	}
+	ver := version.String()
+	ua := fmt.Sprintf("omni-audit/%s (+https://github.com/omni-line/omni-audit)", ver)
+	prober := registry.NewProber(registry.NewHTTPClient(cfg.timeout, cfg.concurrency), ua)
+	prober.Retries = cfg.retries
 
-	quietMode := *quiet || *quietLong
-	_ = *verbose || *verboseLong
-
-	noMkt := *noMarketing || envTruthy("OMNI_AUDIT_NO_MARKETING")
-	var failAny bool
-	switch strings.ToLower(*failOn) {
-	case "any":
-		failAny = true
-	case "none":
-		failAny = false
-	default:
-		fmt.Fprintf(stderr, "error: invalid --fail-on %q (want any|none)\n", *failOn)
-		return report.ExitError
-	}
-
-	fmtName := report.Format(strings.ToLower(*format))
-	if fmtName != report.FormatText && fmtName != report.FormatJSON {
-		fmt.Fprintf(stderr, "error: invalid --format %q (want text|json)\n", *format)
-		return report.ExitError
-	}
-
-	color, err := report.ParseColorMode(*colorMode)
+	res, err := scan.Run(ctx, cfg.root, scan.Options{
+		Ecosystems:     ecosystem.Default(prober),
+		SafeNamespaces: cfg.safeNS,
+		Ignore:         cfg.ignore,
+		Exclude:        cfg.exclude,
+		Concurrency:    cfg.concurrency,
+	})
 	if err != nil {
-		fmt.Fprintf(stderr, "error: %v\n", err)
+		if errors.Is(err, context.Canceled) {
+			fmt.Fprintln(stderr, "error: interrupted")
+		} else {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+		}
 		return report.ExitError
 	}
 
 	stdoutFile, _ := stdout.(*os.File)
 	stderrFile, _ := stderr.(*os.File)
-	stdoutTTY := report.IsTTY(stdoutFile)
-	stderrTTY := report.IsTTY(stderrFile)
-
-	ua := fmt.Sprintf("omni-audit/%s (+https://github.com/omni-line/omni-audit)", version.Version)
-	httpClient := &http.Client{Timeout: *timeout}
-
-	ctx := context.Background()
-	res, err := scan.Run(ctx, root, scan.Options{
-		SafeNamespaces: match.New(safeNS...),
-		Ignore:         match.New(ignore...),
-		Concurrency:    *concurrency,
-		NPM:            regnpm.New(httpClient, ua),
-		Composer:       packagist.New(httpClient, ua),
-		PyPI:           regpypi.New(httpClient, ua),
-	})
-	if err != nil {
+	if err := report.Write(stdout, stderr, res, report.Options{
+		Format:      cfg.format,
+		Version:     ver,
+		Quiet:       cfg.quiet,
+		Verbose:     cfg.verbose,
+		NoMarketing: cfg.noMarketing,
+		ForceMarket: cfg.forceMarket,
+		StdoutIsTTY: report.IsTTY(stdoutFile),
+		StderrIsTTY: report.IsTTY(stderrFile),
+		Color:       cfg.color,
+	}); err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return report.ExitError
 	}
-
-	return report.Write(stdout, stderr, res, report.Options{
-		Format:      fmtName,
-		Version:     version.Version,
-		Quiet:       quietMode,
-		NoMarketing: noMkt,
-		ForceMarket: *forceMarket,
-		FailOnAny:   failAny,
-		StdoutIsTTY: stdoutTTY,
-		StderrIsTTY: stderrTTY,
-		StdoutPiped: !stdoutTTY,
-		Color:       color,
-	})
+	return report.ExitCode(res, report.Policy{FailOnFindings: cfg.failAny, Strict: cfg.strict})
 }
 
-// splitArgs allows `omni-audit [path] [flags]` by separating flags from one path.
-func splitArgs(args []string) (flagArgs, positional []string, err error) {
+func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err error) {
+	fs := flag.NewFlagSet("omni-audit", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var (
+		format      = fs.String("format", "text", "output format: text|json|sarif")
+		timeout     = fs.Duration("timeout", registry.DefaultTimeout, "per-request registry timeout")
+		concurrency = fs.Int("concurrency", scan.DefaultConcurrency, fmt.Sprintf("parallel registry checks (1-%d)", maxConcurrency))
+		retries     = fs.Int("retries", registry.DefaultRetries, fmt.Sprintf("retries for transient registry errors (0-%d)", maxRetries))
+		failOn      = fs.String("fail-on", "any", "when to exit 1: any|none")
+		strict      = fs.Bool("strict", false, "exit 2 if any package or manifest could not be verified")
+		colorMode   = fs.String("color", "auto", "color output: auto|always|never")
+		quiet       = fs.Bool("q", false, "findings only; suppress banner, warnings, summary, and marketing")
+		quietLong   = fs.Bool("quiet", false, "alias for -q")
+		noMarketing = fs.Bool("no-marketing", false, "hide Omni Line CTA / JSON sponsor")
+		forceMarket = fs.Bool("marketing", false, "force marketing even when non-TTY")
+		verbose     = fs.Bool("v", false, "verbose: show package URLs and all warnings")
+		verboseLong = fs.Bool("verbose", false, "alias for -v")
+		versionFlag = fs.Bool("version", false, "print version and exit")
+		safeNS      stringList
+		ignore      stringList
+		exclude     stringList
+	)
+	fs.Var(&safeNS, "safe-namespace", "glob of namespaces you own; matching packages are skipped (repeatable or comma-separated)")
+	fs.Var(&ignore, "ignore", "package name globs to skip (repeatable or comma-separated)")
+	fs.Var(&exclude, "exclude", "path globs or directory names to skip, relative to the scan root (repeatable or comma-separated)")
+	fs.Usage = func() { usage(fs, stderr) }
+
+	flagArgs, positional, err := splitArgs(fs, args)
+	if err != nil {
+		return cfg, false, err
+	}
+	if err := fs.Parse(flagArgs); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return cfg, false, errHelp
+		}
+		return cfg, false, err
+	}
+	if *versionFlag {
+		return cfg, true, nil
+	}
+
+	cfg.root = "."
+	switch len(positional) {
+	case 0:
+	case 1:
+		cfg.root = positional[0]
+	default:
+		return cfg, false, errors.New("too many path arguments (want at most one)")
+	}
+
+	if cfg.format, err = report.ParseFormat(strings.ToLower(*format)); err != nil {
+		return cfg, false, err
+	}
+	if cfg.color, err = report.ParseColorMode(*colorMode); err != nil {
+		return cfg, false, err
+	}
+	switch strings.ToLower(*failOn) {
+	case "any":
+		cfg.failAny = true
+	case "none":
+	default:
+		return cfg, false, fmt.Errorf("invalid --fail-on %q (want any|none)", *failOn)
+	}
+	if *timeout <= 0 {
+		return cfg, false, fmt.Errorf("invalid --timeout %s (must be positive)", *timeout)
+	}
+	if *concurrency < 1 || *concurrency > maxConcurrency {
+		return cfg, false, fmt.Errorf("invalid --concurrency %d (want 1-%d)", *concurrency, maxConcurrency)
+	}
+	if *retries < 0 || *retries > maxRetries {
+		return cfg, false, fmt.Errorf("invalid --retries %d (want 0-%d)", *retries, maxRetries)
+	}
+	if cfg.safeNS, err = match.Compile(safeNS...); err != nil {
+		return cfg, false, fmt.Errorf("--safe-namespace: %w", err)
+	}
+	if cfg.ignore, err = match.Compile(ignore...); err != nil {
+		return cfg, false, fmt.Errorf("--ignore: %w", err)
+	}
+	if cfg.exclude, err = match.Compile(exclude...); err != nil {
+		return cfg, false, fmt.Errorf("--exclude: %w", err)
+	}
+
+	cfg.timeout = *timeout
+	cfg.concurrency = *concurrency
+	cfg.retries = *retries
+	cfg.strict = *strict
+	cfg.quiet = *quiet || *quietLong
+	cfg.verbose = *verbose || *verboseLong
+	cfg.noMarketing = *noMarketing || envTruthy("OMNI_AUDIT_NO_MARKETING")
+	cfg.forceMarket = *forceMarket
+	return cfg, false, nil
+}
+
+func usage(fs *flag.FlagSet, w io.Writer) {
+	fmt.Fprint(w, `Usage: omni-audit [path] [flags]
+
+Scan a project tree (or a single manifest) for dependency confusion risks in
+npm, Composer, and PyPI. Names that are unclaimed on the public registry are
+reported as findings.
+
+Flags:
+`)
+	fs.PrintDefaults()
+	fmt.Fprint(w, `
+Exit codes:
+  0  no findings (or --fail-on none)
+  1  findings reported
+  2  usage or runtime error, or an incomplete scan with --strict
+
+Environment:
+  OMNI_AUDIT_NO_MARKETING=1  same as --no-marketing
+  NO_COLOR=1                 disable ANSI colors (also --color never)
+  FORCE_COLOR=1              enable colors even when non-TTY
+  HTTPS_PROXY, NO_PROXY      standard proxy settings are honored
+`)
+}
+
+// splitArgs allows `omni-audit [path] [flags]` by separating flags from
+// positional arguments. Whether a flag consumes the next argument is derived
+// from the FlagSet itself, so new flags need no extra bookkeeping here.
+func splitArgs(fs *flag.FlagSet, args []string) (flagArgs, positional []string, err error) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if a == "--" {
 			positional = append(positional, args[i+1:]...)
 			break
 		}
-		if strings.HasPrefix(a, "-") {
-			flagArgs = append(flagArgs, a)
-			// Flags that take a separate value (not -x=y / --x=y / boolean-looking).
-			if !strings.Contains(a, "=") && takesValue(a) {
-				if i+1 >= len(args) {
-					return nil, nil, fmt.Errorf("flag %s requires a value", a)
-				}
-				i++
-				flagArgs = append(flagArgs, args[i])
-			}
+		if len(a) < 2 || a[0] != '-' {
+			positional = append(positional, a)
 			continue
 		}
-		positional = append(positional, a)
+		flagArgs = append(flagArgs, a)
+		name := strings.TrimLeft(a, "-")
+		if strings.Contains(name, "=") {
+			continue
+		}
+		f := fs.Lookup(name)
+		if f == nil {
+			continue // fs.Parse reports unknown flags
+		}
+		if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+			continue
+		}
+		if i+1 >= len(args) {
+			return nil, nil, fmt.Errorf("flag %s requires a value", a)
+		}
+		i++
+		flagArgs = append(flagArgs, args[i])
 	}
 	return flagArgs, positional, nil
 }
 
-func takesValue(flagName string) bool {
-	name := strings.TrimLeft(flagName, "-")
-	switch name {
-	case "format", "timeout", "concurrency", "fail-on",
-		"safe-namespace", "ignore", "color":
-		return true
-	default:
-		return false
-	}
-}
-
 func envTruthy(key string) bool {
-	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
-	switch v {
+	switch strings.TrimSpace(strings.ToLower(os.Getenv(key))) {
 	case "1", "true", "yes", "on":
 		return true
 	default:

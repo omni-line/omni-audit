@@ -1,67 +1,59 @@
+// Package composer parses composer.json dependency declarations.
 package composer
 
 import (
 	"encoding/json"
 	"fmt"
-	"os"
+	"sort"
 	"strings"
+
+	"github.com/omni-line/omni-audit/internal/manifest"
 )
 
-type composerJSON struct {
-	Require    map[string]string `json:"require"`
-	RequireDev map[string]string `json:"require-dev"`
-}
+// Groups are the composer.json sections scanned, in reporting order.
+var Groups = []string{"require", "require-dev"}
 
-// Dependency is a declared Composer package.
-type Dependency struct {
-	Name    string
-	Version string
-}
-
-// ParseFile reads composer.json and returns package dependencies (skips php / ext-*).
-func ParseFile(path string) ([]Dependency, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	return Parse(data)
-}
-
-// Parse parses composer.json bytes.
-func Parse(data []byte) ([]Dependency, error) {
-	var c composerJSON
-	if err := json.Unmarshal(data, &c); err != nil {
+// Parse returns Packagist-resolvable dependencies from composer.json bytes.
+//
+// Platform packages (php, ext-*, lib-*, composer-plugin-api, ...) are
+// skipped: every real Composer package is vendor/name, platform ones never are.
+func Parse(data []byte) ([]manifest.Dependency, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parse composer.json: %w", err)
 	}
 	seen := make(map[string]struct{})
-	var out []Dependency
-	add := func(m map[string]string) {
-		for name, ver := range m {
-			if name == "" || skipPlatform(name) {
+	var out []manifest.Dependency
+	for _, group := range Groups {
+		section, ok := raw[group]
+		if !ok || string(section) == "null" {
+			continue
+		}
+		var deps map[string]string
+		if err := json.Unmarshal(section, &deps); err != nil {
+			return nil, fmt.Errorf("parse composer.json %s: %w", group, err)
+		}
+		names := make([]string, 0, len(deps))
+		for name := range deps {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if !strings.Contains(name, "/") {
 				continue
 			}
-			if _, ok := seen[name]; ok {
+			key := strings.ToLower(name)
+			if _, dup := seen[key]; dup {
 				continue
 			}
-			seen[name] = struct{}{}
-			out = append(out, Dependency{Name: name, Version: ver})
+			seen[key] = struct{}{}
+			out = append(out, manifest.Dependency{
+				Name:    name,
+				Version: deps[name],
+				Group:   group,
+				Line:    manifest.JSONKeyLine(data, group, name),
+			})
 		}
 	}
-	add(c.Require)
-	add(c.RequireDev)
 	return out, nil
-}
-
-func skipPlatform(name string) bool {
-	lower := strings.ToLower(name)
-	if lower == "php" {
-		return true
-	}
-	if strings.HasPrefix(lower, "ext-") {
-		return true
-	}
-	if strings.HasPrefix(lower, "lib-") {
-		return true
-	}
-	return false
 }

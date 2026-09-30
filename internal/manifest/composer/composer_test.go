@@ -8,32 +8,42 @@ import (
 
 func TestParseSkipsPlatform(t *testing.T) {
 	data := []byte(`{
-		"require": {
-			"php": "^8.2",
-			"ext-json": "*",
-			"lib-curl": "*",
-			"monolog/monolog": "^3.0",
-			"acme/private": "1.0"
-		},
-		"require-dev": {
-			"phpunit/phpunit": "^10"
-		}
-	}`)
+	"require": {
+		"php": "^8.2",
+		"ext-json": "*",
+		"lib-curl": "*",
+		"composer-plugin-api": "^2.0",
+		"php-64bit": "*",
+		"monolog/monolog": "^3.0",
+		"acme/private": "1.0"
+	},
+	"require-dev": {
+		"phpunit/phpunit": "^10",
+		"Monolog/Monolog": "^3.0"
+	}
+}`)
 	deps, err := composer.Parse(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]bool{}
+	got := map[string]int{}
+	groups := map[string]string{}
 	for _, d := range deps {
-		got[d.Name] = true
+		got[d.Name] = d.Line
+		groups[d.Name] = d.Group
 	}
-	if got["php"] || got["ext-json"] || got["lib-curl"] {
-		t.Fatalf("platform deps should be skipped: %#v", got)
-	}
-	if !got["monolog/monolog"] || !got["acme/private"] || !got["phpunit/phpunit"] {
-		t.Fatalf("missing packages: %#v", got)
+	for _, platform := range []string{"php", "ext-json", "lib-curl", "composer-plugin-api", "php-64bit"} {
+		if _, ok := got[platform]; ok {
+			t.Fatalf("platform dep %s should be skipped: %#v", platform, got)
+		}
 	}
 	if len(deps) != 3 {
-		t.Fatalf("len=%d want 3", len(deps))
+		t.Fatalf("len=%d want 3 (case-insensitive dedupe): %#v", len(deps), got)
+	}
+	if got["acme/private"] != 9 || got["phpunit/phpunit"] != 12 {
+		t.Fatalf("lines: %#v", got)
+	}
+	if groups["phpunit/phpunit"] != "require-dev" {
+		t.Fatalf("groups: %#v", groups)
 	}
 }

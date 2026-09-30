@@ -28,3 +28,19 @@ func TestCommaSplit(t *testing.T) {
 		t.Fatal("comma-separated patterns should both work")
 	}
 }
+
+func TestCompileRejectsMalformed(t *testing.T) {
+	if _, err := match.Compile("@acme/["); err == nil {
+		t.Fatal("expected error for malformed pattern")
+	}
+	if _, err := match.Compile("@acme/*", "acme-?"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNilMatcher(t *testing.T) {
+	var m *match.Matcher
+	if m.Match("x") || !m.Empty() {
+		t.Fatal("nil matcher should match nothing and be empty")
+	}
+}

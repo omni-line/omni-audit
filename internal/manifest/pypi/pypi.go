@@ -1,226 +1,196 @@
+// Package pypi parses requirements files and pyproject.toml dependency
+// declarations.
 package pypi
 
 import (
-	"bufio"
-	"os"
 	"regexp"
 	"strings"
-)
 
-// Dependency is a declared Python package.
-type Dependency struct {
-	Name    string
-	Version string
-}
+	"github.com/omni-line/omni-audit/internal/manifest"
+	regpypi "github.com/omni-line/omni-audit/internal/registry/pypi"
+)
 
 var (
-	reqNameRe = regexp.MustCompile(`(?i)^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(.*)$`)
-	markerRe  = regexp.MustCompile(`\s*;.*$`)
-	tableRe   = regexp.MustCompile(`(?m)^\s*\[([^\]]+)\]\s*$`)
+	reqNameRe = regexp.MustCompile(`^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\s*(?:\[[^\]]*\])?\s*(.*)$`)
+	// TOML table headers, including [[array.tables]] and trailing comments.
+	tableRe = regexp.MustCompile(`(?m)^[ \t]*\[\[?[ \t]*([^\[\]\r\n]+?)[ \t]*\]\]?[ \t]*(?:#.*)?\r?$`)
+	// Array-valued keys: `name = [`.
+	arrayKeyRe = regexp.MustCompile(`(?m)^[ \t]*["']?([A-Za-z0-9_.-]+)["']?[ \t]*=[ \t]*\[`)
 )
 
-// ParseRequirementsFile reads a requirements.txt-style file.
-func ParseRequirementsFile(path string) ([]Dependency, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+// Requirements lines that install from somewhere other than the index.
+var nonIndexPrefixes = []string{"git+", "hg+", "svn+", "bzr+", ".", "/", "~"}
+
+var archiveSuffixes = []string{".whl", ".zip", ".tar.gz", ".tgz", ".tar.bz2"}
+
+// ParseRequirements parses pip requirements-file bytes.
+func ParseRequirements(data []byte) ([]manifest.Dependency, error) {
+	c := newCollector()
+	lines := strings.Split(string(data), "\n")
+	for i := 0; i < len(lines); i++ {
+		lineNo := i + 1
+		line := strings.TrimRight(lines[i], "\r")
+		for strings.HasSuffix(line, `\`) && i+1 < len(lines) {
+			i++
+			line = strings.TrimSuffix(line, `\`) + strings.TrimRight(lines[i], "\r")
+		}
+		line = strings.TrimSpace(stripComment(line))
+		if line == "" || strings.HasPrefix(line, "-") {
+			// Blank, or an option such as -r, -c, -e, --index-url.
+			continue
+		}
+		c.add(line, "", lineNo)
 	}
-	return ParseRequirements(data)
+	return c.out, nil
 }
 
-// ParseRequirements parses requirements.txt bytes.
-func ParseRequirements(data []byte) ([]Dependency, error) {
-	seen := make(map[string]struct{})
-	var out []Dependency
-	sc := bufio.NewScanner(strings.NewReader(string(data)))
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+// stripComment removes a pip comment: '#' at line start or after whitespace.
+func stripComment(line string) string {
+	for i := 0; i < len(line); i++ {
+		if line[i] == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t') {
+			return line[:i]
 		}
-		if strings.HasPrefix(line, "-") {
-			continue
-		}
-		lower := strings.ToLower(line)
-		if strings.HasPrefix(lower, "git+") || strings.HasPrefix(lower, "hg+") ||
-			strings.HasPrefix(lower, "svn+") || strings.HasPrefix(lower, "bzr+") ||
-			strings.Contains(line, "://") {
-			continue
-		}
-		line = markerRe.ReplaceAllString(line, "")
-		line = strings.TrimSpace(line)
-		name, ver, ok := splitRequirement(line)
-		if !ok {
-			continue
-		}
-		key := normalizeName(name)
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, Dependency{Name: name, Version: ver})
 	}
-	if err := sc.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return line
 }
 
-func splitRequirement(line string) (name, version string, ok bool) {
-	m := reqNameRe.FindStringSubmatch(line)
-	if m == nil {
-		return "", "", false
-	}
-	name = m[1]
-	rest := strings.TrimSpace(m[2])
-	if strings.HasPrefix(rest, "@") {
-		return "", "", false
-	}
-	return name, rest, true
-}
-
-// ParsePyProjectFile reads project dependencies from pyproject.toml.
-func ParsePyProjectFile(path string) ([]Dependency, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	return ParsePyProject(data)
-}
-
-// ParsePyProject extracts PEP 621 [project] dependencies and optional-dependencies.
-func ParsePyProject(data []byte) ([]Dependency, error) {
+// ParsePyProject extracts PEP 621 [project] dependencies and
+// optional-dependencies, plus PEP 735 [dependency-groups].
+func ParsePyProject(data []byte) ([]manifest.Dependency, error) {
 	text := string(data)
-	seen := make(map[string]struct{})
-	var out []Dependency
-
-	add := func(raw string) {
-		raw = strings.TrimSpace(raw)
-		raw = strings.Trim(raw, `"'`)
-		raw = markerRe.ReplaceAllString(raw, "")
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			return
-		}
-		name, ver, ok := splitRequirement(raw)
-		if !ok {
-			return
-		}
-		// Skip python version constraints mistakenly listed as deps.
-		if strings.EqualFold(name, "python") {
-			return
-		}
-		key := normalizeName(name)
-		if _, exists := seen[key]; exists {
-			return
-		}
-		seen[key] = struct{}{}
-		out = append(out, Dependency{Name: name, Version: ver})
-	}
-
-	sections := splitTOMLSections(text)
-	if body, ok := sections["project"]; ok {
-		for _, item := range findNamedStringArray(body, "dependencies") {
-			add(item)
-		}
-	}
-	if body, ok := sections["project.optional-dependencies"]; ok {
-		for _, arr := range findAllStringArrays(body) {
-			for _, item := range arr {
-				add(item)
+	c := newCollector()
+	for _, sec := range splitTOMLSections(text) {
+		switch sec.name {
+		case "project":
+			for _, arr := range findArrays(text, sec) {
+				if arr.key == "dependencies" {
+					c.addAll(text, arr, "dependencies")
+				}
+			}
+		case "project.optional-dependencies":
+			for _, arr := range findArrays(text, sec) {
+				c.addAll(text, arr, "optional-dependencies."+arr.key)
+			}
+		case "dependency-groups":
+			for _, arr := range findArrays(text, sec) {
+				c.addAll(text, arr, "dependency-groups."+arr.key)
 			}
 		}
 	}
-
-	if out == nil {
-		out = []Dependency{}
-	}
-	return out, nil
+	return c.out, nil
 }
 
-func splitTOMLSections(text string) map[string]string {
-	out := make(map[string]string)
-	locs := tableRe.FindAllStringSubmatchIndex(text, -1)
-	if len(locs) == 0 {
-		return out
+type collector struct {
+	seen map[string]struct{}
+	out  []manifest.Dependency
+}
+
+func newCollector() *collector {
+	return &collector{seen: make(map[string]struct{}), out: []manifest.Dependency{}}
+}
+
+func (c *collector) addAll(text string, arr tomlArray, group string) {
+	for _, it := range arr.items {
+		c.add(it.value, group, strings.Count(text[:it.offset], "\n")+1)
 	}
+}
+
+// add parses one PEP 508 requirement string.
+func (c *collector) add(req, group string, line int) {
+	if i := strings.IndexByte(req, ';'); i >= 0 {
+		req = req[:i] // environment marker
+	}
+	req = strings.TrimSpace(req)
+	lower := strings.ToLower(req)
+	if req == "" || strings.Contains(req, "://") {
+		return
+	}
+	for _, p := range nonIndexPrefixes {
+		if strings.HasPrefix(lower, p) {
+			return
+		}
+	}
+	for _, s := range archiveSuffixes {
+		if strings.HasSuffix(lower, s) {
+			return
+		}
+	}
+	m := reqNameRe.FindStringSubmatch(req)
+	if m == nil {
+		return
+	}
+	name, version := m[1], strings.TrimSpace(m[2])
+	if strings.HasPrefix(version, "@") {
+		return // PEP 508 direct reference: name @ url
+	}
+	if strings.EqualFold(name, "python") {
+		return
+	}
+	key := regpypi.Normalize(name)
+	if _, dup := c.seen[key]; dup {
+		return
+	}
+	c.seen[key] = struct{}{}
+	c.out = append(c.out, manifest.Dependency{Name: name, Version: version, Group: group, Line: line})
+}
+
+type tomlSection struct {
+	name       string
+	start, end int // body byte range within the document
+}
+
+func splitTOMLSections(text string) []tomlSection {
+	locs := tableRe.FindAllStringSubmatchIndex(text, -1)
+	out := make([]tomlSection, 0, len(locs))
 	for i, loc := range locs {
-		name := text[loc[2]:loc[3]]
-		start := loc[1]
 		end := len(text)
 		if i+1 < len(locs) {
 			end = locs[i+1][0]
 		}
-		out[name] = text[start:end]
+		name := strings.ReplaceAll(text[loc[2]:loc[3]], `"`, "")
+		name = strings.ReplaceAll(name, " ", "")
+		out = append(out, tomlSection{name: name, start: loc[1], end: end})
 	}
 	return out
 }
 
-func findNamedStringArray(body, key string) []string {
-	re := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(key) + `\s*=\s*\[`)
-	loc := re.FindStringIndex(body)
-	if loc == nil {
-		return nil
-	}
-	idx := strings.Index(body[loc[0]:], "[")
-	if idx < 0 {
-		return nil
-	}
-	items, ok := readStringArray(body[loc[0]+idx:])
-	if !ok {
-		return nil
-	}
-	return items
+type tomlItem struct {
+	value  string
+	offset int
 }
 
-func findAllStringArrays(body string) [][]string {
-	var out [][]string
-	re := regexp.MustCompile(`(?m)^\s*[A-Za-z0-9_-]+\s*=\s*\[`)
-	locs := re.FindAllStringIndex(body, -1)
-	for _, loc := range locs {
-		idx := strings.Index(body[loc[0]:loc[1]], "[")
-		if idx < 0 {
-			continue
-		}
-		items, ok := readStringArray(body[loc[0]+idx:])
+type tomlArray struct {
+	key   string
+	items []tomlItem
+}
+
+// findArrays returns every `key = [ ... ]` string array directly in sec.
+func findArrays(text string, sec tomlSection) []tomlArray {
+	body := text[sec.start:sec.end]
+	var out []tomlArray
+	for _, loc := range arrayKeyRe.FindAllStringSubmatchIndex(body, -1) {
+		open := sec.start + loc[1] - 1 // index of '['
+		items, ok := readStringArray(text, open)
 		if ok {
-			out = append(out, items)
+			out = append(out, tomlArray{key: body[loc[2]:loc[3]], items: items})
 		}
 	}
 	return out
 }
 
-func readStringArray(s string) ([]string, bool) {
-	if !strings.HasPrefix(s, "[") {
-		return nil, false
-	}
-	depth := 0
-	inStr := false
-	var quote rune
-	escape := false
-	var cur strings.Builder
-	var items []string
-	for _, r := range s {
-		if inStr {
-			if escape {
-				cur.WriteRune(r)
-				escape = false
-				continue
+// readStringArray reads the TOML array starting at text[open] == '['. Only
+// strings directly inside the outer array are returned; strings in nested
+// arrays or inline tables (e.g. {include-group = "dev"}) and comments are
+// ignored.
+func readStringArray(text string, open int) ([]tomlItem, bool) {
+	depth, braces := 0, 0
+	var items []tomlItem
+	for i := open; i < len(text); i++ {
+		switch ch := text[i]; ch {
+		case '#':
+			for i < len(text) && text[i] != '\n' {
+				i++
 			}
-			if r == '\\' {
-				escape = true
-				continue
-			}
-			if r == quote {
-				inStr = false
-				items = append(items, cur.String())
-				cur.Reset()
-				continue
-			}
-			cur.WriteRune(r)
-			continue
-		}
-		switch r {
 		case '[':
 			depth++
 		case ']':
@@ -228,16 +198,42 @@ func readStringArray(s string) ([]string, bool) {
 			if depth == 0 {
 				return items, true
 			}
+		case '{':
+			braces++
+		case '}':
+			braces--
 		case '"', '\'':
-			inStr = true
-			quote = r
+			val, end, ok := readTOMLString(text, i)
+			if !ok {
+				return nil, false
+			}
+			if depth == 1 && braces == 0 {
+				items = append(items, tomlItem{value: val, offset: i})
+			}
+			i = end
 		}
 	}
 	return nil, false
 }
 
-func normalizeName(name string) string {
-	name = strings.ToLower(name)
-	name = strings.ReplaceAll(name, "_", "-")
-	return name
+// readTOMLString reads a single-line basic ("...") or literal ('...') string
+// starting at text[start]. It returns the value and the closing quote index.
+func readTOMLString(text string, start int) (string, int, bool) {
+	quote := text[start]
+	var b strings.Builder
+	for i := start + 1; i < len(text); i++ {
+		ch := text[i]
+		switch {
+		case ch == '\n':
+			return "", 0, false
+		case ch == '\\' && quote == '"' && i+1 < len(text):
+			i++
+			b.WriteByte(text[i])
+		case ch == quote:
+			return b.String(), i, true
+		default:
+			b.WriteByte(ch)
+		}
+	}
+	return "", 0, false
 }

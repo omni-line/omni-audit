@@ -10,7 +10,7 @@ Distributed as a **standalone Go binary**. No Node or PHP runtime required.
 
 ## The problem
 
-If your team uses private packages alongside public registries (npmjs.com, Packagist), a build can resolve a **malicious public package** that reuses an internal name. Omni Audit flags unclaimed public names before they are hijacked.
+If your team uses private packages alongside public registries (npmjs.com, Packagist, PyPI), a build can resolve a **malicious public package** that reuses an internal name. Omni Audit flags unclaimed public names before they are hijacked.
 
 Auditing is the first step. [Omni Line](https://omniline.app) is the durable fix: a self-hosted registry that routes internal packages correctly across ecosystems.
 
@@ -47,23 +47,39 @@ omni-audit
 # Scan a path
 omni-audit ./apps/api
 
+# Scan a single manifest
+omni-audit ./services/billing/requirements.txt
+
 # JSON for CI
 omni-audit --format json --no-marketing
 
-# Suppress false positives for claimed org scopes
-omni-audit --safe-namespace '@acme/*,acme/*'
+# SARIF for GitHub code scanning / security dashboards
+omni-audit --format sarif > omni-audit.sarif
+
+# Skip names you own and fixture directories
+omni-audit --safe-namespace '@acme/*,acme/*' --exclude testdata,fixtures
 ```
 
 Example text output (colors when the terminal supports them):
 
 ```text
-omni-audit v0.1.0 — Dependency confusion audit
+omni-audit v0.3.0 — Dependency confusion audit
 Backed by Omni Line — one registry for every package your team ships
 
-[!] npm @acme/internal-utils (1.0.0) in package.json — reason=unclaimed
-[!] composer acme/internal-sdk (^1.0) in composer.json — reason=unclaimed
+✗ 2 unclaimed package names found
 
-Scanned 2 manifest(s), 8 package(s): 2 finding(s), 0 skipped, 0 error(s)
+  ECOSYSTEM  PACKAGE               VERSION  LOCATION              SECTION
+  composer   acme/internal-sdk     ^1.0     composer.json:7       require
+  npm        @acme/internal-utils  1.0.0    package.json:5        dependencies
+
+Anyone can publish these names on the public registry. If a build resolves
+them there instead of your private source, it installs the publisher's code.
+
+How to fix
+  composer  Register the vendor name on Packagist so nobody else can publish under it, ...
+  npm       Claim the name (or its @scope as an npm organization) on npmjs.com, ...
+
+Scanned 2 manifests · 8 packages · 2 findings · 0 skipped · 0 errors in 412ms
 
 ───
 Unclaimed names can be published by anyone on the public registry.
@@ -75,10 +91,20 @@ https://omniline.app  ·  docs: https://omniline.app/docs
 
 ## How it works
 
-1. Walks the tree for `package.json`, `composer.json`, `requirements*.txt`, and `pyproject.toml` (skips `node_modules`, `vendor`, `.venv`, `venv`, `__pycache__`, `.git`, `dist`, `build`)
-2. Collects declared dependencies (NPM: `dependencies` / `devDependencies` / `optionalDependencies` / `peerDependencies`; Composer: `require` / `require-dev`, skipping `php` and `ext-*` / `lib-*`; PyPI: requirements lines and PEP 621 `[project]` / optional-dependencies)
-3. Concurrently queries the public npm registry, Packagist, and PyPI
-4. Reports packages that return **404** as `reason=unclaimed`
+1. Walks the tree for `package.json`, `composer.json`, `requirements*.txt`, `requirements/*.txt`, and `pyproject.toml` (skips `node_modules`, `vendor`, `.venv`, `venv`, `__pycache__`, `.git`, `dist`, `build`, and other dependency/cache dirs, plus anything matched by `--exclude`)
+2. Collects declared dependencies with their section and line number:
+   - **npm**: `dependencies` / `devDependencies` / `optionalDependencies` / `peerDependencies`. Local and VCS specs (`file:`, `workspace:`, `link:`, git URLs, `user/repo`) are skipped; aliases (`npm:real-pkg@^1`) are checked under the real name.
+   - **Composer**: `require` / `require-dev`, skipping platform packages (`php`, `ext-*`, `lib-*`, `composer-plugin-api`, …).
+   - **PyPI**: requirements files (comments, markers, extras, line continuations) and `pyproject.toml` PEP 621 `[project]` dependencies / optional-dependencies plus PEP 735 `[dependency-groups]`. Names are compared using PEP 503 normalization.
+3. Checks each distinct name once per ecosystem against the public npm registry, Packagist, and PyPI using lightweight `HEAD` requests, with retries and backoff for rate limits and transient errors
+4. Reports names that return **404** as `reason=unclaimed`; checks that fail are reported as warnings, never as clean
+
+### Security properties
+
+- Only package names are sent, and only to the public registries above (HTTPS, TLS 1.2+, no HTTPS→HTTP redirects). Names that are not valid for the registry are never sent.
+- Manifests are read with a 10 MiB cap; FIFOs/devices and symlinks that resolve outside the scan root are skipped.
+- Values from scanned files are escaped before being printed, so a crafted manifest cannot inject terminal escape sequences.
+- `HTTPS_PROXY` / `NO_PROXY` are honored for locked-down networks.
 
 ### Exit codes
 
@@ -86,24 +112,56 @@ https://omniline.app  ·  docs: https://omniline.app/docs
 | --- | --- |
 | `0` | No findings (or `--fail-on none`) |
 | `1` | One or more findings (`--fail-on any`, default) |
-| `2` | Usage or runtime error |
+| `2` | Usage or runtime error, or an incomplete scan with `--strict` |
+
+Without `--strict`, registry failures and unreadable manifests are reported as warnings and do not change the exit code. Use `--strict` in CI when an unverified package should block the pipeline.
 
 ### Flags
 
 | Flag | Description |
 | --- | --- |
-| `--format text\|json` | Output format (default `text`) |
-| `--safe-namespace` | Glob allowlist (repeatable / comma-separated) |
+| `--format text\|json\|sarif` | Output format (default `text`) |
+| `--safe-namespace` | Globs for namespaces you own; matches are skipped (repeatable / comma-separated) |
 | `--ignore` | Skip package name globs |
-| `--timeout` | Per-request timeout (default `5s`) |
-| `--concurrency` | Parallel checks (default `16`) |
+| `--exclude` | Skip paths: directory/file names or globs relative to the scan root |
+| `--strict` | Exit `2` if any manifest or package could not be verified |
+| `--timeout` | Per-request timeout (default `10s`) |
+| `--retries` | Retries for 429 / 5xx / network errors (default `2`, max `10`) |
+| `--concurrency` | Parallel checks (default `16`, max `256`) |
 | `--fail-on any\|none` | Whether findings fail the process |
-| `-q` / `--quiet` | Findings only; no banner or marketing |
+| `-q` / `--quiet` | Findings table only; no banner, warnings, summary, or marketing |
 | `--no-marketing` | Hide Omni Line CTA / JSON `sponsor` |
 | `--marketing` | Force marketing even when non-TTY |
 | `--color auto\|always\|never` | ANSI colors (default `auto` on TTY) |
-| `-v` / `--verbose` | Extra detail |
+| `-v` / `--verbose` | Show package URLs and all warnings |
 | `--version` | Print version |
+
+### JSON output
+
+```json
+{
+  "schema_version": 1,
+  "version": "0.3.0",
+  "complete": true,
+  "findings": [
+    {
+      "ecosystem": "npm",
+      "package": "@acme/internal-utils",
+      "version": "1.0.0",
+      "manifest": "package.json",
+      "line": 5,
+      "group": "dependencies",
+      "reason": "unclaimed",
+      "registry": "registry.npmjs.org",
+      "url": "https://www.npmjs.com/package/@acme/internal-utils",
+      "remediation": "Claim the name (or its @scope as an npm organization) ..."
+    }
+  ],
+  "stats": { "manifests": 1, "packages": 4, "unique_packages": 4, "findings": 1, "skipped": 0, "errors": 0, "duration_ms": 412 }
+}
+```
+
+`complete` is `false` when any warning was raised (see `warnings[]`, each with a `kind` of `walk`, `manifest`, or `registry`). New fields may be added; breaking changes bump `schema_version`.
 
 Environment:
 
@@ -119,8 +177,20 @@ JSON includes an optional top-level `sponsor` object by default. Use `--no-marke
 - name: Dependency confusion audit
   run: |
     curl -sL https://github.com/omni-line/omni-audit/releases/latest/download/omni-audit_Linux_x86_64.tar.gz | tar xz
-    ./omni-audit --format json --no-marketing --safe-namespace '@your-org/*'
+    ./omni-audit --format json --no-marketing --strict --safe-namespace '@your-org/*'
 ```
+
+GitHub code scanning (findings appear as alerts with file/line annotations):
+
+```yaml
+- name: Dependency confusion audit
+  run: ./omni-audit --format sarif --fail-on none > omni-audit.sarif
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: omni-audit.sarif
+```
+
+Run from the repository root so SARIF paths are repository-relative.
 
 ## Roadmap (not in v1)
 

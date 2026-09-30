@@ -1,62 +1,49 @@
+// Package npm checks package-name existence on the public npm registry.
 package npm
 
 import (
 	"context"
-	"fmt"
-	"io"
-	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
-	"time"
 
 	"github.com/omni-line/omni-audit/internal/registry"
 )
 
-const defaultBase = "https://registry.npmjs.org"
+// DefaultBaseURL is the public npm registry.
+const DefaultBaseURL = "https://registry.npmjs.org"
 
-// Client checks package existence on the npm public registry.
+// Uppercase is accepted because legacy packages (e.g. JSONStream) still use it.
+var nameRe = regexp.MustCompile(`(?i)^(?:@[a-z0-9~][a-z0-9._~-]*/)?[a-z0-9~][a-z0-9._~-]*$`)
+
+const maxNameLen = 214
+
+// Client checks package existence on the npm registry.
 type Client struct {
-	HTTP    *http.Client
 	BaseURL string
-	UA      string
+	Prober  *registry.Prober
 }
 
-// New returns a Client with sensible defaults.
-func New(httpClient *http.Client, userAgent string) *Client {
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 5 * time.Second}
-	}
-	return &Client{HTTP: httpClient, BaseURL: defaultBase, UA: userAgent}
+// New returns a Client for the public npm registry.
+func New(p *registry.Prober) *Client {
+	return &Client{BaseURL: DefaultBaseURL, Prober: p}
+}
+
+// ValidName reports whether name is a syntactically valid npm package name.
+func ValidName(name string) bool {
+	return len(name) <= maxNameLen && nameRe.MatchString(name)
 }
 
 // Exists implements registry.Checker.
 func (c *Client) Exists(ctx context.Context, name string) (registry.Status, error) {
-	base := strings.TrimRight(c.BaseURL, "/")
-	// Scoped packages: @scope/name → /@scope%2Fname
-	enc := url.PathEscape(name)
-	reqURL := base + "/" + enc
+	if !ValidName(name) {
+		return registry.Unknown, registry.InvalidNameError("npm", name)
+	}
+	// Scoped packages are requested as /@scope%2Fname.
+	return c.Prober.Probe(ctx, strings.TrimRight(c.BaseURL, "/")+"/"+url.PathEscape(name))
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return registry.Unknown, err
-	}
-	if c.UA != "" {
-		req.Header.Set("User-Agent", c.UA)
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return registry.Unknown, err
-	}
-	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
-
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return registry.Exists, nil
-	case http.StatusNotFound:
-		return registry.NotFound, nil
-	default:
-		return registry.Unknown, fmt.Errorf("npm registry: unexpected status %d for %s", resp.StatusCode, name)
-	}
+// PackageURL returns the human-facing page for name on npmjs.com.
+func PackageURL(name string) string {
+	return "https://www.npmjs.com/package/" + name
 }

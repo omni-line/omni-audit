@@ -20,7 +20,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.22.x"
+          # Always ship with a supported toolchain so binaries carry current
+          # standard-library security fixes.
+          go-version: stable
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6

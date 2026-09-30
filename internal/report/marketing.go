@@ -1,5 +1,7 @@
 package report
 
+import "strings"
+
 // Brand URLs and product positioning aligned with https://omniline.app and /docs.
 const (
 	sponsorName = "Omni Line"
@@ -17,7 +19,7 @@ type Sponsor struct {
 
 // HeaderLine returns the short CLI banner (plain text; color applied by Write).
 func HeaderLine(version string) string {
-	return "omni-audit v" + version + " — Dependency confusion audit"
+	return "omni-audit v" + strings.TrimPrefix(version, "v") + " — Dependency confusion audit"
 }
 
 // HeaderSubtitle is the brand line under the banner.

@@ -13,9 +13,8 @@ import (
 func TestExists(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/pypi/requests/json":
+		case "/pypi/requests/json", "/pypi/flask-login/json":
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{}`))
 		case "/pypi/acme-private/json":
 			w.WriteHeader(http.StatusNotFound)
 		default:
@@ -24,15 +23,33 @@ func TestExists(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := regpypi.New(srv.Client(), "omni-audit-test")
+	c := regpypi.New(registry.NewProber(srv.Client(), "omni-audit-test"))
 	c.BaseURL = srv.URL
 
-	st, err := c.Exists(context.Background(), "requests")
-	if err != nil || st != registry.Exists {
-		t.Fatalf("requests: status=%v err=%v", st, err)
+	cases := map[string]registry.Status{
+		"requests":     registry.Exists,
+		"Flask_Login":  registry.Exists,
+		"acme.private": registry.NotFound,
 	}
-	st, err = c.Exists(context.Background(), "acme-private")
-	if err != nil || st != registry.NotFound {
-		t.Fatalf("acme-private: status=%v err=%v", st, err)
+	for name, want := range cases {
+		st, err := c.Exists(context.Background(), name)
+		if err != nil || st != want {
+			t.Errorf("%s: status=%v err=%v want %v", name, st, err, want)
+		}
+	}
+}
+
+func TestNormalize(t *testing.T) {
+	cases := map[string]string{
+		"Flask_Login":    "flask-login",
+		"zope.interface": "zope-interface",
+		"A__B--C..D":     "a-b-c-d",
+		"requests":       "requests",
+		"Typing.Extras":  "typing-extras",
+	}
+	for in, want := range cases {
+		if got := regpypi.Normalize(in); got != want {
+			t.Errorf("Normalize(%q)=%q want %q", in, got, want)
+		}
 	}
 }

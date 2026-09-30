@@ -1,31 +1,53 @@
+// Package scan orchestrates discovery, parsing, and registry checks.
 package scan
 
 import (
 	"context"
-	"fmt"
-	"path/filepath"
-	"strings"
+	"errors"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/omni-line/omni-audit/internal/discover"
-	"github.com/omni-line/omni-audit/internal/manifest/composer"
-	"github.com/omni-line/omni-audit/internal/manifest/npm"
-	"github.com/omni-line/omni-audit/internal/manifest/pypi"
+	"github.com/omni-line/omni-audit/internal/ecosystem"
+	"github.com/omni-line/omni-audit/internal/manifest"
 	"github.com/omni-line/omni-audit/internal/match"
 	"github.com/omni-line/omni-audit/internal/registry"
 )
 
+// ReasonUnclaimed marks a name that does not exist on the public registry.
+const ReasonUnclaimed = "unclaimed"
+
+// Warning kinds.
+const (
+	WarnWalk     = "walk"     // a path could not be walked or was skipped
+	WarnManifest = "manifest" // a manifest could not be read or parsed
+	WarnRegistry = "registry" // a registry check failed; result unknown
+)
+
+// DefaultConcurrency is used when Options.Concurrency is not positive.
+const DefaultConcurrency = 16
+
 // Finding is a reportable dependency confusion risk.
+//
+// ecosystem, package, version, manifest, and reason are part of the stable
+// JSON schema; other fields are additive.
 type Finding struct {
-	Ecosystem string `json:"ecosystem"`
-	Package   string `json:"package"`
-	Version   string `json:"version,omitempty"`
-	Manifest  string `json:"manifest"`
-	Reason    string `json:"reason"`
+	Ecosystem   string `json:"ecosystem"`
+	Package     string `json:"package"`
+	Version     string `json:"version,omitempty"`
+	Manifest    string `json:"manifest"`
+	Line        int    `json:"line,omitempty"`
+	Group       string `json:"group,omitempty"`
+	Reason      string `json:"reason"`
+	Registry    string `json:"registry,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Remediation string `json:"remediation,omitempty"`
 }
 
-// Warning is a non-fatal scan issue (e.g. network error).
+// Warning is a non-fatal issue that may leave the scan incomplete.
 type Warning struct {
+	Kind      string `json:"kind,omitempty"`
 	Ecosystem string `json:"ecosystem"`
 	Package   string `json:"package"`
 	Manifest  string `json:"manifest"`
@@ -34,11 +56,18 @@ type Warning struct {
 
 // Stats summarizes a scan.
 type Stats struct {
+	// Manifests is the number of manifests discovered.
 	Manifests int `json:"manifests"`
-	Packages  int `json:"packages"`
-	Findings  int `json:"findings"`
-	Skipped   int `json:"skipped"`
-	Errors    int `json:"errors"`
+	// Packages counts dependency declarations across all manifests.
+	Packages int `json:"packages"`
+	// UniquePackages is the number of distinct names checked on registries.
+	UniquePackages int `json:"unique_packages"`
+	Findings       int `json:"findings"`
+	// Skipped counts declarations matched by --ignore or --safe-namespace.
+	Skipped int `json:"skipped"`
+	// Errors counts warnings (unreadable paths, bad manifests, failed checks).
+	Errors     int   `json:"errors"`
+	DurationMS int64 `json:"duration_ms"`
 }
 
 // Result is the full scan outcome.
@@ -48,204 +77,230 @@ type Result struct {
 	Stats    Stats     `json:"stats"`
 }
 
-// Options configures a Scanner.
+// Complete reports whether every discovered manifest and package was verified.
+func (r *Result) Complete() bool {
+	return len(r.Warnings) == 0
+}
+
+// Options configures Run.
 type Options struct {
+	Ecosystems     []ecosystem.Ecosystem
 	SafeNamespaces *match.Matcher
 	Ignore         *match.Matcher
+	Exclude        *match.Matcher
 	Concurrency    int
-	NPM            registry.Checker
-	Composer       registry.Checker
-	PyPI           registry.Checker
 }
 
-type job struct {
-	ecosystem string
-	name      string
-	version   string
-	manifest  string
-	checker   registry.Checker
+type checkKey struct{ ecosystem, name string }
+
+type check struct {
+	eco      *ecosystem.Ecosystem
+	name     string
+	manifest string // first manifest that declared it, for warnings
+	status   registry.Status
+	err      error
 }
 
-type outcome struct {
-	finding *Finding
-	warning *Warning
-	skipped bool
+type occurrence struct {
+	key      checkKey
+	eco      *ecosystem.Ecosystem
+	dep      manifest.Dependency
+	manifest string
 }
 
-// Run discovers manifests under root and checks public registries.
+var errNotChecked = errors.New("not checked: scan was cancelled")
+
+// Run discovers manifests under root and checks each distinct package name
+// once against its public registry. On cancellation it returns the partial
+// result together with ctx.Err().
 func Run(ctx context.Context, root string, opts Options) (*Result, error) {
-	if opts.Concurrency <= 0 {
-		opts.Concurrency = 16
+	start := time.Now()
+	if err := ecosystem.ValidateAll(opts.Ecosystems); err != nil {
+		return nil, err
 	}
-	if opts.NPM == nil || opts.Composer == nil || opts.PyPI == nil {
-		return nil, fmt.Errorf("npm, composer, and pypi registry checkers are required")
+	byName := make(map[string]*ecosystem.Ecosystem, len(opts.Ecosystems))
+	for i := range opts.Ecosystems {
+		byName[opts.Ecosystems[i].Name] = &opts.Ecosystems[i]
 	}
 
-	manifests, err := discover.Walk(root)
+	walk, err := discover.Walk(root, discover.Options{
+		Classify: func(rel string) string {
+			for i := range opts.Ecosystems {
+				if opts.Ecosystems[i].IsManifest(rel) {
+					return opts.Ecosystems[i].Name
+				}
+			}
+			return ""
+		},
+		Exclude: opts.Exclude,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	var jobs []job
-	for _, m := range manifests {
-		switch m.Ecosystem {
-		case "npm":
-			deps, err := npm.ParseFile(m.Path)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %w", m.Path, err)
+	res := &Result{Findings: []Finding{}}
+	res.Stats.Manifests = len(walk.Manifests)
+	for _, p := range walk.Problems {
+		res.Warnings = append(res.Warnings, Warning{Kind: WarnWalk, Manifest: p.Path, Message: p.Err.Error()})
+	}
+
+	checks := make(map[checkKey]*check)
+	var ordered []*check
+	var occs []occurrence
+	for _, m := range walk.Manifests {
+		eco := byName[m.Ecosystem]
+		deps, err := parse(eco, m)
+		if err != nil {
+			res.Warnings = append(res.Warnings, Warning{
+				Kind: WarnManifest, Ecosystem: eco.Name, Manifest: m.Path, Message: err.Error(),
+			})
+			continue
+		}
+		for _, d := range deps {
+			res.Stats.Packages++
+			key := checkKey{eco.Name, eco.Key(d.Name)}
+			if allowlisted(opts, d.Name, key.name) {
+				res.Stats.Skipped++
+				continue
 			}
-			for _, d := range deps {
-				jobs = append(jobs, job{
-					ecosystem: "npm",
-					name:      d.Name,
-					version:   d.Version,
-					manifest:  m.Path,
-					checker:   opts.NPM,
-				})
+			if _, ok := checks[key]; !ok {
+				c := &check{eco: eco, name: d.Name, manifest: m.Path, status: registry.Unknown, err: errNotChecked}
+				checks[key] = c
+				ordered = append(ordered, c)
 			}
-		case "composer":
-			deps, err := composer.ParseFile(m.Path)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %w", m.Path, err)
-			}
-			for _, d := range deps {
-				jobs = append(jobs, job{
-					ecosystem: "composer",
-					name:      d.Name,
-					version:   d.Version,
-					manifest:  m.Path,
-					checker:   opts.Composer,
-				})
-			}
-		case "pypi":
-			deps, err := parsePythonManifest(m.Path)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %w", m.Path, err)
-			}
-			for _, d := range deps {
-				jobs = append(jobs, job{
-					ecosystem: "pypi",
-					name:      d.Name,
-					version:   d.Version,
-					manifest:  m.Path,
-					checker:   opts.PyPI,
-				})
-			}
+			occs = append(occs, occurrence{key: key, eco: eco, dep: d, manifest: m.Path})
 		}
 	}
+	res.Stats.UniquePackages = len(ordered)
 
-	res := &Result{
-		Stats: Stats{
-			Manifests: len(manifests),
-			Packages:  len(jobs),
-		},
+	runChecks(ctx, ordered, opts.Concurrency)
+
+	for _, o := range occs {
+		if checks[o.key].status != registry.NotFound {
+			continue
+		}
+		res.Findings = append(res.Findings, Finding{
+			Ecosystem:   o.eco.Name,
+			Package:     o.dep.Name,
+			Version:     o.dep.Version,
+			Manifest:    o.manifest,
+			Line:        o.dep.Line,
+			Group:       o.dep.Group,
+			Reason:      ReasonUnclaimed,
+			Registry:    o.eco.Registry,
+			URL:         o.eco.URL(o.dep.Name),
+			Remediation: o.eco.Remediation,
+		})
+	}
+	for _, c := range ordered {
+		if c.status != registry.Unknown {
+			continue
+		}
+		msg := "registry check failed"
+		if c.err != nil {
+			msg = c.err.Error()
+		}
+		res.Warnings = append(res.Warnings, Warning{
+			Kind: WarnRegistry, Ecosystem: c.eco.Name, Package: c.name, Manifest: c.manifest, Message: msg,
+		})
 	}
 
-	if len(jobs) == 0 {
-		return res, nil
+	sortFindings(res.Findings)
+	sortWarnings(res.Warnings)
+	res.Stats.Findings = len(res.Findings)
+	res.Stats.Errors = len(res.Warnings)
+	res.Stats.DurationMS = time.Since(start).Milliseconds()
+	return res, ctx.Err()
+}
+
+func parse(eco *ecosystem.Ecosystem, m discover.Manifest) ([]manifest.Dependency, error) {
+	data, err := manifest.ReadFile(m.Path)
+	if err != nil {
+		return nil, err
+	}
+	return eco.Parse(m.Rel, data)
+}
+
+// allowlisted matches both the declared and the normalized name so that
+// e.g. --ignore 'acme-*' also covers acme_internal on PyPI.
+func allowlisted(opts Options, name, normalized string) bool {
+	for _, m := range []*match.Matcher{opts.Ignore, opts.SafeNamespaces} {
+		if m.Match(name) || (normalized != name && m.Match(normalized)) {
+			return true
+		}
+	}
+	return false
+}
+
+// runChecks resolves every check with a bounded worker pool. Each worker
+// writes only to the check it received, and results are read after Wait.
+func runChecks(ctx context.Context, checks []*check, workers int) {
+	if len(checks) == 0 {
+		return
+	}
+	if workers <= 0 {
+		workers = DefaultConcurrency
+	}
+	if workers > len(checks) {
+		workers = len(checks)
 	}
 
-	jobsCh := make(chan job)
-	outCh := make(chan outcome)
+	jobs := make(chan *check)
 	var wg sync.WaitGroup
-
-	workers := opts.Concurrency
-	if workers > len(jobs) {
-		workers = len(jobs)
-	}
-
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := range jobsCh {
-				select {
-				case <-ctx.Done():
-					return
-				default:
+			for c := range jobs {
+				if ctx.Err() != nil {
+					continue // leave as Unknown / errNotChecked
 				}
-
-				if (opts.Ignore != nil && opts.Ignore.Match(j.name)) ||
-					(opts.SafeNamespaces != nil && opts.SafeNamespaces.Match(j.name)) {
-					outCh <- outcome{skipped: true}
-					continue
+				st, err := c.eco.Checker.Exists(ctx, c.name)
+				if err != nil {
+					st = registry.Unknown
 				}
-
-				st, err := j.checker.Exists(ctx, j.name)
-				if err != nil || st == registry.Unknown {
-					msg := "registry check failed"
-					if err != nil {
-						msg = err.Error()
-					}
-					outCh <- outcome{warning: &Warning{
-						Ecosystem: j.ecosystem,
-						Package:   j.name,
-						Manifest:  j.manifest,
-						Message:   msg,
-					}}
-					continue
-				}
-				if st == registry.NotFound {
-					outCh <- outcome{finding: &Finding{
-						Ecosystem: j.ecosystem,
-						Package:   j.name,
-						Version:   j.version,
-						Manifest:  j.manifest,
-						Reason:    "unclaimed",
-					}}
-					continue
-				}
-				outCh <- outcome{}
+				c.status, c.err = st, err
 			}
 		}()
 	}
 
-	go func() {
-		defer close(jobsCh)
-		for _, j := range jobs {
-			select {
-			case <-ctx.Done():
-				return
-			case jobsCh <- j:
-			}
-		}
-	}()
-
-	go func() {
-		wg.Wait()
-		close(outCh)
-	}()
-
-	for o := range outCh {
-		if o.skipped {
-			res.Stats.Skipped++
-			continue
-		}
-		if o.warning != nil {
-			res.Warnings = append(res.Warnings, *o.warning)
-			res.Stats.Errors++
-			continue
-		}
-		if o.finding != nil {
-			res.Findings = append(res.Findings, *o.finding)
+feed:
+	for _, c := range checks {
+		select {
+		case <-ctx.Done():
+			break feed
+		case jobs <- c:
 		}
 	}
-	res.Stats.Findings = len(res.Findings)
-
-	if err := ctx.Err(); err != nil {
-		return res, err
-	}
-	return res, nil
+	close(jobs)
+	wg.Wait()
 }
 
-func parsePythonManifest(path string) ([]pypi.Dependency, error) {
-	base := strings.ToLower(filepath.Base(path))
-	switch {
-	case base == "pyproject.toml":
-		return pypi.ParsePyProjectFile(path)
-	case strings.HasPrefix(base, "requirements") && strings.HasSuffix(base, ".txt"):
-		return pypi.ParseRequirementsFile(path)
-	default:
-		return pypi.ParseRequirementsFile(path)
-	}
+func sortFindings(fs []Finding) {
+	sort.SliceStable(fs, func(i, j int) bool {
+		a, b := fs[i], fs[j]
+		if a.Manifest != b.Manifest {
+			return a.Manifest < b.Manifest
+		}
+		if a.Line != b.Line {
+			return a.Line < b.Line
+		}
+		if a.Ecosystem != b.Ecosystem {
+			return a.Ecosystem < b.Ecosystem
+		}
+		return a.Package < b.Package
+	})
+}
+
+func sortWarnings(ws []Warning) {
+	sort.SliceStable(ws, func(i, j int) bool {
+		a, b := ws[i], ws[j]
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		if a.Manifest != b.Manifest {
+			return a.Manifest < b.Manifest
+		}
+		return a.Package < b.Package
+	})
 }

@@ -11,10 +11,18 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        go-version: ["1.22.x"]
+        # 1.20 is the minimum declared in go.mod; keep it tested.
+        go-version: ["1.20.x", "1.22.x"]
+        os: [ubuntu-latest]
+        include:
+          - go-version: "1.22.x"
+            os: macos-latest
+          - go-version: "1.22.x"
+            os: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -24,7 +32,11 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
 
+      - name: Verify modules
+        run: go mod verify
+
       - name: Format check
+        if: runner.os == 'Linux'
         run: |
           unformatted=$(gofmt -l $(find . -name '*.go' -not -path './vendor/*'))
           if [ -n "$unformatted" ]; then
@@ -37,12 +49,39 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test ./...
+        run: go test -race -count=1 ./...
+
+      - name: Build
+        run: go build ./cmd/omni-audit
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.22.x"
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84 # v6
         with:
           version: v1.61.0
 
-      - name: Build
-        run: make build
+  vuln:
+    # Uses the latest stable Go, the same toolchain release binaries are built
+    # with, so standard-library advisories are checked against what ships.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: stable
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...

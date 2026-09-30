@@ -1,62 +1,53 @@
+// Package pypi checks project-name existence on the Python Package Index.
 package pypi
 
 import (
 	"context"
-	"fmt"
-	"io"
-	"net/http"
-	"net/url"
+	"regexp"
 	"strings"
-	"time"
 
 	"github.com/omni-line/omni-audit/internal/registry"
 )
 
-const defaultBase = "https://pypi.org"
+// DefaultBaseURL is the public PyPI instance.
+const DefaultBaseURL = "https://pypi.org"
 
-// Client checks package existence on the public PyPI registry.
+var (
+	// nameRe is the PEP 508 project-name grammar.
+	nameRe = regexp.MustCompile(`(?i)^([a-z0-9]|[a-z0-9][a-z0-9._-]*[a-z0-9])$`)
+	sepRe  = regexp.MustCompile(`[-_.]+`)
+)
+
+// Client checks project existence on PyPI.
 type Client struct {
-	HTTP    *http.Client
 	BaseURL string
-	UA      string
+	Prober  *registry.Prober
 }
 
-// New returns a Client with sensible defaults.
-func New(httpClient *http.Client, userAgent string) *Client {
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 5 * time.Second}
-	}
-	return &Client{HTTP: httpClient, BaseURL: defaultBase, UA: userAgent}
+// New returns a Client for public PyPI.
+func New(p *registry.Prober) *Client {
+	return &Client{BaseURL: DefaultBaseURL, Prober: p}
 }
 
-// Exists implements registry.Checker.
-// Uses GET /pypi/<name>/json — 404 means unclaimed.
+// Normalize applies PEP 503 normalization: lowercase, runs of -_. become "-".
+func Normalize(name string) string {
+	return sepRe.ReplaceAllString(strings.ToLower(strings.TrimSpace(name)), "-")
+}
+
+// ValidName reports whether name is a valid PEP 508 project name.
+func ValidName(name string) bool {
+	return nameRe.MatchString(name)
+}
+
+// Exists implements registry.Checker using /pypi/<name>/json.
 func (c *Client) Exists(ctx context.Context, name string) (registry.Status, error) {
-	base := strings.TrimRight(c.BaseURL, "/")
-	enc := url.PathEscape(name)
-	reqURL := base + "/pypi/" + enc + "/json"
+	if !ValidName(name) {
+		return registry.Unknown, registry.InvalidNameError("pypi", name)
+	}
+	return c.Prober.Probe(ctx, strings.TrimRight(c.BaseURL, "/")+"/pypi/"+Normalize(name)+"/json")
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return registry.Unknown, err
-	}
-	if c.UA != "" {
-		req.Header.Set("User-Agent", c.UA)
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return registry.Unknown, err
-	}
-	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
-
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return registry.Exists, nil
-	case http.StatusNotFound:
-		return registry.NotFound, nil
-	default:
-		return registry.Unknown, fmt.Errorf("pypi: unexpected status %d for %s", resp.StatusCode, name)
-	}
+// PackageURL returns the human-facing page for name on pypi.org.
+func PackageURL(name string) string {
+	return "https://pypi.org/project/" + Normalize(name) + "/"
 }

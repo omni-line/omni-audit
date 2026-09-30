@@ -1,64 +1,59 @@
+// Package packagist checks package-name existence on Packagist (Composer).
 package packagist
 
 import (
 	"context"
-	"fmt"
-	"io"
-	"net/http"
+	"regexp"
 	"strings"
-	"time"
 
 	"github.com/omni-line/omni-audit/internal/registry"
 )
 
-const defaultBase = "https://repo.packagist.org"
+// DefaultBaseURL is the Packagist metadata mirror (Composer v2 API).
+const DefaultBaseURL = "https://repo.packagist.org"
+
+// nameRe is Composer's own package-name pattern (see composer/schema.json).
+var nameRe = regexp.MustCompile(`^[a-z0-9]([_.-]?[a-z0-9]+)*/[a-z0-9](([_.]|-{1,2})?[a-z0-9]+)*$`)
 
 // Client checks package existence on Packagist.
 type Client struct {
-	HTTP    *http.Client
 	BaseURL string
-	UA      string
+	Prober  *registry.Prober
 }
 
-// New returns a Client with sensible defaults.
-func New(httpClient *http.Client, userAgent string) *Client {
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 5 * time.Second}
-	}
-	return &Client{HTTP: httpClient, BaseURL: defaultBase, UA: userAgent}
+// New returns a Client for public Packagist.
+func New(p *registry.Prober) *Client {
+	return &Client{BaseURL: DefaultBaseURL, Prober: p}
+}
+
+// Normalize lowercases name; Composer package names are case-insensitive.
+func Normalize(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// ValidName reports whether name is a valid vendor/package Composer name.
+func ValidName(name string) bool {
+	return nameRe.MatchString(Normalize(name))
 }
 
 // Exists implements registry.Checker.
-// Packagist package names are vendor/package.
+//
+// Tagged releases live at /p2/<name>.json and dev branches at
+// /p2/<name>~dev.json; a package with only dev branches is still claimed.
 func (c *Client) Exists(ctx context.Context, name string) (registry.Status, error) {
-	name = strings.ToLower(name)
-	if !strings.Contains(name, "/") {
-		return registry.Unknown, fmt.Errorf("invalid composer package name %q", name)
+	name = Normalize(name)
+	if !nameRe.MatchString(name) {
+		return registry.Unknown, registry.InvalidNameError("composer", name)
 	}
-	base := strings.TrimRight(c.BaseURL, "/")
-	reqURL := base + "/p2/" + name + ".json"
+	base := strings.TrimRight(c.BaseURL, "/") + "/p2/" + name
+	st, err := c.Prober.Probe(ctx, base+".json")
+	if err != nil || st != registry.NotFound {
+		return st, err
+	}
+	return c.Prober.Probe(ctx, base+"~dev.json")
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return registry.Unknown, err
-	}
-	if c.UA != "" {
-		req.Header.Set("User-Agent", c.UA)
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return registry.Unknown, err
-	}
-	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
-
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return registry.Exists, nil
-	case http.StatusNotFound:
-		return registry.NotFound, nil
-	default:
-		return registry.Unknown, fmt.Errorf("packagist: unexpected status %d for %s", resp.StatusCode, name)
-	}
+// PackageURL returns the human-facing page for name on packagist.org.
+func PackageURL(name string) string {
+	return "https://packagist.org/packages/" + Normalize(name)
 }

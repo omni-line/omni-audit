@@ -9,6 +9,7 @@ import (
 // ColorMode controls ANSI styling.
 type ColorMode string
 
+// Supported color modes.
 const (
 	ColorAuto   ColorMode = "auto"
 	ColorAlways ColorMode = "always"
@@ -21,6 +22,8 @@ type Palette struct {
 }
 
 // NewPalette builds a palette from mode and whether the destination is a TTY.
+// In auto mode, NO_COLOR (any non-empty value, per no-color.org) disables
+// colors and FORCE_COLOR enables them for non-TTY destinations.
 func NewPalette(mode ColorMode, isTTY bool) Palette {
 	switch mode {
 	case ColorAlways:
@@ -28,13 +31,22 @@ func NewPalette(mode ColorMode, isTTY bool) Palette {
 	case ColorNever:
 		return Palette{enabled: false}
 	default:
-		if envTruthy("NO_COLOR") {
+		if os.Getenv("NO_COLOR") != "" {
 			return Palette{enabled: false}
 		}
-		if v := strings.ToLower(strings.TrimSpace(os.Getenv("FORCE_COLOR"))); v == "1" || v == "true" || v == "yes" {
+		if forceColor() {
 			return Palette{enabled: true}
 		}
 		return Palette{enabled: isTTY}
+	}
+}
+
+func forceColor() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("FORCE_COLOR"))) {
+	case "", "0", "false", "no", "off":
+		return false
+	default:
+		return true
 	}
 }
 
@@ -45,17 +57,13 @@ func (p Palette) wrap(code, s string) string {
 	return "\033[" + code + "m" + s + "\033[0m"
 }
 
-func (p Palette) Bold(s string) string   { return p.wrap("1", s) }
-func (p Palette) Dim(s string) string    { return p.wrap("2", s) }
-func (p Palette) Red(s string) string    { return p.wrap("31", s) }
-func (p Palette) Green(s string) string  { return p.wrap("32", s) }
-func (p Palette) Yellow(s string) string { return p.wrap("33", s) }
-func (p Palette) Blue(s string) string   { return p.wrap("34", s) }
-func (p Palette) Magenta(s string) string {
-	return p.wrap("35", s)
-}
-func (p Palette) Cyan(s string) string { return p.wrap("36", s) }
-
+// Style helpers.
+func (p Palette) Bold(s string) string       { return p.wrap("1", s) }
+func (p Palette) Dim(s string) string        { return p.wrap("2", s) }
+func (p Palette) Red(s string) string        { return p.wrap("31", s) }
+func (p Palette) Green(s string) string      { return p.wrap("32", s) }
+func (p Palette) Yellow(s string) string     { return p.wrap("33", s) }
+func (p Palette) Cyan(s string) string       { return p.wrap("36", s) }
 func (p Palette) BoldRed(s string) string    { return p.wrap("1;31", s) }
 func (p Palette) BoldGreen(s string) string  { return p.wrap("1;32", s) }
 func (p Palette) BoldYellow(s string) string { return p.wrap("1;33", s) }
@@ -63,20 +71,6 @@ func (p Palette) BoldCyan(s string) string   { return p.wrap("1;36", s) }
 
 // Enabled reports whether colors are active.
 func (p Palette) Enabled() bool { return p.enabled }
-
-func envTruthy(key string) bool {
-	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
-	switch v {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		// NO_COLOR is truthy when set to any non-empty value per the standard.
-		if key == "NO_COLOR" {
-			return strings.TrimSpace(os.Getenv(key)) != ""
-		}
-		return false
-	}
-}
 
 // ParseColorMode validates --color values.
 func ParseColorMode(s string) (ColorMode, error) {
