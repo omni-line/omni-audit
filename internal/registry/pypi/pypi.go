@@ -39,12 +39,23 @@ func ValidName(name string) bool {
 	return nameRe.MatchString(name)
 }
 
-// Exists implements registry.Checker using /pypi/<name>/json.
+// Exists implements registry.Checker.
+//
+// Primary check is /pypi/<name>/json. Projects that are registered but have
+// no releases (or whose releases were all deleted) return 404 from the JSON
+// API while still appearing on the Simple API (/simple/<name>/, PEP 503).
+// Those names are owned, so a JSON 404 falls back to the Simple index.
 func (c *Client) Exists(ctx context.Context, name string) (registry.Status, error) {
 	if !ValidName(name) {
 		return registry.Unknown, registry.InvalidNameError("pypi", name)
 	}
-	return c.Prober.Probe(ctx, strings.TrimRight(c.BaseURL, "/")+"/pypi/"+Normalize(name)+"/json")
+	norm := Normalize(name)
+	base := strings.TrimRight(c.BaseURL, "/")
+	st, err := c.Prober.Probe(ctx, base+"/pypi/"+norm+"/json")
+	if err != nil || st != registry.NotFound {
+		return st, err
+	}
+	return c.Prober.Probe(ctx, base+"/simple/"+norm+"/")
 }
 
 // PackageURL returns the human-facing page for name on pypi.org.

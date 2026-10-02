@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-10-02
+
+### Fixed
+
+- PyPI: projects registered with no releases (JSON API 404, Simple API 200) are no longer reported as unclaimed ([#8](https://github.com/omni-line/omni-audit/issues/8))
+
 ## [0.4.0] — 2026-09-30
 
 ### Added

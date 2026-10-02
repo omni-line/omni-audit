@@ -17,6 +17,13 @@ func TestExists(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		case "/pypi/acme-private/json":
 			w.WriteHeader(http.StatusNotFound)
+		case "/simple/acme-private/":
+			w.WriteHeader(http.StatusNotFound)
+		case "/pypi/test/json":
+			// Registered project with no releases: JSON 404, Simple 200.
+			w.WriteHeader(http.StatusNotFound)
+		case "/simple/test/":
+			w.WriteHeader(http.StatusOK)
 		default:
 			w.WriteHeader(http.StatusTeapot)
 		}
@@ -30,6 +37,7 @@ func TestExists(t *testing.T) {
 		"requests":     registry.Exists,
 		"Flask_Login":  registry.Exists,
 		"acme.private": registry.NotFound,
+		"test":         registry.Exists,
 	}
 	for name, want := range cases {
 		st, err := c.Exists(context.Background(), name)
