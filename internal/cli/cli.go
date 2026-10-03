@@ -52,6 +52,7 @@ type config struct {
 	retries     int
 	failAny     bool
 	strict      bool
+	minSeverity string
 	quiet       bool
 	verbose     bool
 	noMarketing bool
@@ -122,7 +123,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return report.ExitError
 	}
-	return report.ExitCode(res, report.Policy{FailOnFindings: cfg.failAny, Strict: cfg.strict})
+	return report.ExitCode(res, report.Policy{
+		FailOnFindings: cfg.failAny,
+		Strict:         cfg.strict,
+		MinSeverity:    cfg.minSeverity,
+	})
 }
 
 func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err error) {
@@ -136,6 +141,7 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 		retries     = fs.Int("retries", registry.DefaultRetries, fmt.Sprintf("retries for transient registry errors (0-%d)", maxRetries))
 		failOn      = fs.String("fail-on", "any", "when to exit 1: any|none")
 		strict      = fs.Bool("strict", false, "exit 2 if any package or manifest could not be verified")
+		minSeverity = fs.String("min-severity", "low", "minimum finding severity that fails the build: low|high|critical")
 		colorMode   = fs.String("color", "auto", "color output: auto|always|never")
 		quiet       = fs.Bool("q", false, "findings only; suppress banner, warnings, summary, and marketing")
 		quietLong   = fs.Bool("quiet", false, "alias for -q")
@@ -189,6 +195,9 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 	default:
 		return cfg, false, fmt.Errorf("invalid --fail-on %q (want any|none)", *failOn)
 	}
+	if cfg.minSeverity, err = scan.ParseSeverity(strings.ToLower(*minSeverity)); err != nil {
+		return cfg, false, fmt.Errorf("invalid --min-severity %q (want low|high|critical)", *minSeverity)
+	}
 	if *timeout <= 0 {
 		return cfg, false, fmt.Errorf("invalid --timeout %s (must be positive)", *timeout)
 	}
@@ -222,9 +231,9 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 func usage(fs *flag.FlagSet, w io.Writer) {
 	fmt.Fprint(w, `Usage: omni-audit [path] [flags]
 
-Scan a project tree (or a single manifest) for dependency confusion risks in
-npm, Composer, and PyPI. Names that are unclaimed on the public registry are
-reported as findings.
+Scan a project tree (or a single manifest) for dependency confusion risks across
+npm, Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub. Names
+that are unclaimed on the public registry are reported as findings.
 
 Flags:
 `)

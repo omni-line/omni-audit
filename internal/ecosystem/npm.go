@@ -1,6 +1,7 @@
 package ecosystem
 
 import (
+	"context"
 	"path"
 	"strings"
 
@@ -12,7 +13,7 @@ import (
 
 // NPM is package.json checked against the npm registry.
 func NPM(c registry.Checker) Ecosystem {
-	return Ecosystem{
+	eco := Ecosystem{
 		Name:     "npm",
 		Registry: "registry.npmjs.org",
 		IsManifest: func(rel string) bool {
@@ -26,4 +27,11 @@ func NPM(c registry.Checker) Ecosystem {
 			"and map internal scopes to your private registry in .npmrc.",
 		Checker: c,
 	}
+	if client, ok := c.(*regnpm.Client); ok {
+		eco.Namespace = regnpm.Scope
+		eco.NamespaceChecker = registry.CheckerFunc(func(ctx context.Context, ns string) (registry.Status, error) {
+			return client.ScopeExists(ctx, ns)
+		})
+	}
+	return eco
 }

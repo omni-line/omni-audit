@@ -1,6 +1,7 @@
 package ecosystem
 
 import (
+	"context"
 	"path"
 	"strings"
 
@@ -12,7 +13,7 @@ import (
 
 // Composer is composer.json checked against Packagist.
 func Composer(c registry.Checker) Ecosystem {
-	return Ecosystem{
+	eco := Ecosystem{
 		Name:     "composer",
 		Registry: "packagist.org",
 		IsManifest: func(rel string) bool {
@@ -27,4 +28,11 @@ func Composer(c registry.Checker) Ecosystem {
 			"and declare your private repository in composer.json \"repositories\".",
 		Checker: c,
 	}
+	if client, ok := c.(*packagist.Client); ok {
+		eco.Namespace = packagist.Vendor
+		eco.NamespaceChecker = registry.CheckerFunc(func(ctx context.Context, ns string) (registry.Status, error) {
+			return client.VendorExists(ctx, ns)
+		})
+	}
+	return eco
 }

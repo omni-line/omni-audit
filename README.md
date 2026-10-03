@@ -4,13 +4,13 @@
 [![CI](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml/badge.svg)](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml)
 [![Powered by Omni Line](https://img.shields.io/badge/Powered%20by-Omni%20Line-FF4B4B?style=flat)](https://omniline.app/)
 
-**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion** risk. It discovers NPM, Composer, PyPI, and Go manifests, checks whether each declared package name exists on the public registry, and reports names that are still **unclaimed** — names an attacker could publish.
+**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion** risk. It discovers NPM, Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub manifests, checks whether each declared name exists on the public registry, and reports names that are still **unclaimed** — names an attacker could publish.
 
 Distributed as a **standalone Go binary**. No Node or PHP runtime required.
 
 ## The problem
 
-If your team uses private packages alongside public registries (npmjs.com, Packagist, PyPI, proxy.golang.org), a build can resolve a **malicious public package** that reuses an internal name. Omni Audit flags unclaimed public names before they are hijacked.
+If your team uses private packages alongside public registries (npmjs.com, Packagist, PyPI, crates.io, Maven Central, and others), a build can resolve a **malicious public package** that reuses an internal name. Omni Audit flags unclaimed public names before they are hijacked.
 
 Auditing is the first step. [Omni Line](https://omniline.app) is the durable fix: a self-hosted registry that routes internal packages correctly across ecosystems.
 
@@ -20,6 +20,8 @@ Auditing is the first step. [Omni Line](https://omniline.app) is the durable fix
 
 Download the latest release from
 [GitHub Releases](https://github.com/omni-line/omni-audit/releases).
+See [SECURITY.md](SECURITY.md#verifying-releases) for cosign, attestation, and
+checksum verification commands.
 
 ### From source
 
@@ -63,14 +65,14 @@ omni-audit --safe-namespace '@acme/*,acme/*' --exclude testdata,fixtures
 Example text output (colors when the terminal supports them):
 
 ```text
-omni-audit v0.3.0 — Dependency confusion audit
+omni-audit v0.5.0 — Dependency confusion audit
 Backed by Omni Line — one registry for every package your team ships
 
 ✗ 2 unclaimed package names found
 
-  ECOSYSTEM  PACKAGE               VERSION  LOCATION              SECTION
-  composer   acme/internal-sdk     ^1.0     composer.json:7       require
-  npm        @acme/internal-utils  1.0.0    package.json:5        dependencies
+  SEVERITY  ECOSYSTEM  PACKAGE               VERSION  LOCATION              SECTION
+  critical  composer   acme/internal-sdk     ^1.0     composer.json:7       require
+  critical  npm        @acme/internal-utils  1.0.0    package.json:5        dependencies
 
 Anyone can publish these names on the public registry. If a build resolves
 them there instead of your private source, it installs the publisher's code.
@@ -91,14 +93,20 @@ https://omniline.app  ·  docs: https://omniline.app/docs
 
 ## How it works
 
-1. Walks the tree for `package.json`, `composer.json`, `requirements*.txt`, `requirements/*.txt`, `pyproject.toml`, and `go.mod` (skips `node_modules`, `vendor`, `.venv`, `venv`, `__pycache__`, `.git`, `dist`, `build`, and other dependency/cache dirs, plus anything matched by `--exclude`)
+1. Walks the tree for supported manifests (skips `node_modules`, `vendor`, `target`, `.bundle`, `.venv`, `venv`, `__pycache__`, `.git`, `dist`, `build`, and other dependency/cache dirs, plus anything matched by `--exclude`)
 2. Collects declared dependencies with their section and line number:
-   - **npm**: `dependencies` / `devDependencies` / `optionalDependencies` / `peerDependencies`. Local and VCS specs (`file:`, `workspace:`, `link:`, git URLs, `user/repo`) are skipped; aliases (`npm:real-pkg@^1`) are checked under the real name.
-   - **Composer**: `require` / `require-dev`, skipping platform packages (`php`, `ext-*`, `lib-*`, `composer-plugin-api`, …).
-   - **PyPI**: requirements files (comments, markers, extras, line continuations) and `pyproject.toml` PEP 621 `[project]` dependencies / optional-dependencies plus PEP 735 `[dependency-groups]`. Names are compared using PEP 503 normalization.
-   - **Go**: `require` directives in `go.mod` (including `// indirect`). Paths must look like public module paths (first element contains a `.`). Checked via `proxy.golang.org`.
-3. Checks each distinct name once per ecosystem against the public npm registry, Packagist, PyPI, and the Go module proxy using lightweight `HEAD` requests, with retries and backoff for rate limits and transient errors
-4. Reports names that return **404** as `reason=unclaimed`; checks that fail are reported as warnings, never as clean
+   - **npm**: `package.json` dependency sections; local/VCS specs skipped; aliases checked under the real name
+   - **Composer**: `composer.json` `require` / `require-dev` (platform packages skipped)
+   - **PyPI**: `requirements*.txt`, `requirements/*.txt`, `pyproject.toml` (PEP 621 / PEP 735)
+   - **Go**: `go.mod` `require` paths via `proxy.golang.org`
+   - **Cargo**: `Cargo.toml` dependency tables (path/git/workspace skipped) via crates.io
+   - **RubyGems**: `Gemfile` / `*.gemspec` via rubygems.org
+   - **Maven**: `pom.xml` `groupId:artifactId` via Maven Central
+   - **Conan**: `conanfile.txt` requires via ConanCenter
+   - **Docker**: `Dockerfile` `FROM` and Compose `image:` refs via Docker Hub (unqualified / `docker.io` only)
+3. Checks each distinct name once per ecosystem against its public registry (lightweight `HEAD` / search where needed), with retries and backoff
+4. For npm scopes and Packagist vendors, also checks whether the **namespace** itself is claimed, and assigns severity (`critical` / `high` / `low`)
+5. Reports names that return **404** as `reason=unclaimed`; checks that fail are warnings, never treated as clean
 
 ### Security properties
 
@@ -112,10 +120,10 @@ https://omniline.app  ·  docs: https://omniline.app/docs
 | Code | Meaning |
 | --- | --- |
 | `0` | No findings (or `--fail-on none`) |
-| `1` | One or more findings (`--fail-on any`, default) |
+| `1` | One or more findings at or above `--min-severity` (`--fail-on any`, default) |
 | `2` | Usage or runtime error, or an incomplete scan with `--strict` |
 
-Without `--strict`, registry failures and unreadable manifests are reported as warnings and do not change the exit code. Use `--strict` in CI when an unverified package should block the pipeline.
+Without `--strict`, registry failures and unreadable manifests are reported as warnings and do not change the exit code. Use `--strict` in CI when an unverified package should block the pipeline. Use `--min-severity high` (or `critical`) to ignore low-severity scoped findings when the scope/vendor is already claimed.
 
 ### Flags
 
@@ -130,6 +138,7 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
 | `--retries` | Retries for 429 / 5xx / network errors (default `2`, max `10`) |
 | `--concurrency` | Parallel checks (default `16`, max `256`) |
 | `--fail-on any\|none` | Whether findings fail the process |
+| `--min-severity low\|high\|critical` | Minimum severity that exits `1` (default `low`) |
 | `-q` / `--quiet` | Findings table only; no banner, warnings, summary, or marketing |
 | `--no-marketing` | Hide Omni Line CTA / JSON `sponsor` |
 | `--marketing` | Force marketing even when non-TTY |
@@ -153,6 +162,9 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
       "line": 5,
       "group": "dependencies",
       "reason": "unclaimed",
+      "severity": "critical",
+      "namespace": "acme",
+      "namespace_status": "unclaimed",
       "registry": "registry.npmjs.org",
       "url": "https://www.npmjs.com/package/@acme/internal-utils",
       "remediation": "Claim the name (or its @scope as an npm organization) ..."
@@ -162,7 +174,7 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
 }
 ```
 
-`complete` is `false` when any warning was raised (see `warnings[]`, each with a `kind` of `walk`, `manifest`, or `registry`). New fields may be added; breaking changes bump `schema_version`.
+`complete` is `false` when any warning was raised (see `warnings[]`, each with a `kind` of `walk`, `manifest`, `registry`, or `namespace`). New fields may be added; breaking changes bump `schema_version`.
 
 Environment:
 
@@ -195,10 +207,10 @@ Run from the repository root so SARIF paths are repository-relative.
 
 ## Roadmap
 
-- Additional ecosystems (Maven, Cargo)
 - Lockfile / `.npmrc` / `auth.json` / `pip.conf` / `GOPRIVATE` policy analysis
 - Optional Omni Line registry URL to verify private existence
 - Poetry/`Pipfile` table-style dependency maps (requirements + PEP 621 covered today)
+- Gradle manifests, `conanfile.py`, and non-Hub OCI registries (GHCR, Quay, ECR)
 
 ## Contributing
 

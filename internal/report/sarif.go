@@ -188,13 +188,37 @@ func sarifFinding(f scan.Finding) sarifResult {
 	if f.Group != "" {
 		props["group"] = f.Group
 	}
+	sev := f.Severity
+	if sev == "" {
+		sev = scan.SeverityHigh
+	}
+	props["severity"] = sev
+	if f.Namespace != "" {
+		props["namespace"] = f.Namespace
+	}
+	if f.NamespaceStatus != "" {
+		props["namespace_status"] = f.NamespaceStatus
+	}
+	level, secSev := sarifSeverity(sev)
+	props["security-severity"] = secSev
 	return sarifResult{
 		RuleID:              sarifRuleID,
-		Level:               "error",
+		Level:               level,
 		Message:             sarifText{Text: msg},
 		Locations:           []sarifLocation{loc},
 		PartialFingerprints: map[string]string{fingerprintK: hex.EncodeToString(sum[:16])},
 		Properties:          props,
+	}
+}
+
+func sarifSeverity(sev string) (level, securitySeverity string) {
+	switch sev {
+	case scan.SeverityCritical:
+		return "error", "9.0"
+	case scan.SeverityLow:
+		return "warning", "3.1"
+	default:
+		return "error", "8.1"
 	}
 }
 

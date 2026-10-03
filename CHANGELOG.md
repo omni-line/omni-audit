@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-03
+
+### Added
+
+- Cargo: scan `Cargo.toml` dependency tables and check crate names on crates.io ([#2](https://github.com/omni-line/omni-audit/issues/2))
+- RubyGems: scan `Gemfile` / `*.gemspec` and check names on rubygems.org ([#3](https://github.com/omni-line/omni-audit/issues/3))
+- Maven: scan `pom.xml` coordinates (`groupId:artifactId`) against Maven Central ([#1](https://github.com/omni-line/omni-audit/issues/1))
+- Conan: scan `conanfile.txt` `[requires]` / `[tool_requires]` against ConanCenter ([#5](https://github.com/omni-line/omni-audit/issues/5))
+- Docker: scan `Dockerfile` `FROM` and Compose `image:` refs against Docker Hub (public namespace confusion) ([#4](https://github.com/omni-line/omni-audit/issues/4))
+- Severity from namespace ownership for npm scopes and Packagist vendors (`critical` / `high` / `low`), with JSON `severity` / `namespace` / `namespace_status`, SARIF levels, a SEVERITY column in text output, and `--min-severity` for CI gating ([#6](https://github.com/omni-line/omni-audit/issues/6))
+- Signed releases: keyless cosign signatures on `checksums.txt`, Syft SBOMs per archive, and GitHub build provenance attestations ([#7](https://github.com/omni-line/omni-audit/issues/7))
+
+### Changed
+
+- Discovery also skips Cargo `target/` and Bundler `.bundle/`
+
 ## [0.4.1] — 2026-10-02
 
 ### Fixed

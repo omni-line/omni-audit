@@ -24,6 +24,13 @@ func TestRunFindsUnclaimed(t *testing.T) {
 		switch r.URL.Path {
 		case "/lodash", "/p2/monolog/monolog.json", "/pypi/requests/json":
 			w.WriteHeader(http.StatusOK)
+		case "/-/v1/search":
+			// No packages under @acme/ → unclaimed scope (critical).
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"objects":[]}`))
+		case "/packages/list.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"packageNames":[]}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -51,6 +58,7 @@ func TestRunFindsUnclaimed(t *testing.T) {
 	npmClient.BaseURL = srv.URL
 	packClient := packagist.New(p)
 	packClient.BaseURL = srv.URL
+	packClient.ListURL = srv.URL
 	pypiClient := regpypi.New(p)
 	pypiClient.BaseURL = srv.URL
 	ecos := []ecosystem.Ecosystem{
@@ -66,14 +74,19 @@ func TestRunFindsUnclaimed(t *testing.T) {
 	if res.Stats.Findings != 3 {
 		t.Fatalf("findings=%d want 3: %+v", res.Stats.Findings, res.Findings)
 	}
+	// Critical (unclaimed scope/vendor) before high (unscoped).
 	first := res.Findings[0]
-	if first.Manifest != filepath.Join(root, "composer.json") || first.Package != "acme/private" {
-		t.Fatalf("findings should be sorted by manifest: %+v", res.Findings)
+	if first.Severity != scan.SeverityCritical || first.Package != "acme/private" {
+		t.Fatalf("expected critical composer finding first: %+v", res.Findings)
 	}
 	npmFinding := res.Findings[1]
-	if npmFinding.Line != 4 || npmFinding.Group != "dependencies" ||
+	if npmFinding.Package != "@acme/internal" || npmFinding.Severity != scan.SeverityCritical ||
+		npmFinding.Line != 4 || npmFinding.Group != "dependencies" ||
 		npmFinding.URL != "https://www.npmjs.com/package/@acme/internal" || npmFinding.Remediation == "" {
 		t.Fatalf("npm finding lacks detail: %+v", npmFinding)
+	}
+	if res.Findings[2].Package != "acme-private" || res.Findings[2].Severity != scan.SeverityHigh {
+		t.Fatalf("pypi finding: %+v", res.Findings[2])
 	}
 
 	res2, err := scan.Run(context.Background(), root, scan.Options{
