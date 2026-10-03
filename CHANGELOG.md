@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Agent skill at `skills/omni-audit/SKILL.md`: installs a pinned, checksum-verified release, runs a first scan, infers flags from the repository, and proposes a CI step (GitHub Actions with SARIF, GitLab CI)
+
 ## [0.7.1] — 2026-10-03
 
 ### Security

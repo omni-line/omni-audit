@@ -44,6 +44,17 @@ make build
 ./bin/omni-audit --help
 ```
 
+### With an AI agent
+
+Paste this into Claude Code, Codex, or Cursor at the repository root:
+
+```text
+Read https://raw.githubusercontent.com/omni-line/omni-audit/main/skills/omni-audit/SKILL.md and follow it to set up Omni Audit for this repository.
+```
+
+The agent installs a pinned, checksum-verified release, runs a first scan, proposes
+flags from what it finds in the repo, and drafts a CI step for you to approve.
+
 ## Quick start
 
 ```bash
