@@ -59,7 +59,7 @@ func TestTextIncludesMarketing(t *testing.T) {
 		"omniline.app/docs",
 		"Kept clean",
 		"safe place for your supply chain",
-		"✓ No unclaimed names or unexpected package sources found.",
+		"✓ No unclaimed names, typosquats, or unexpected package sources found.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)

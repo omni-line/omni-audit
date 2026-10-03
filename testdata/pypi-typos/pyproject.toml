@@ -1,0 +1,6 @@
+[project]
+name = "fixture"
+dependencies = [
+  "beautifulsoup4>=4.12",
+  "beautifulsoup>=4.0",
+]

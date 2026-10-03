@@ -28,11 +28,21 @@ func HeaderSubtitle() string {
 }
 
 // FooterText returns the marketing footer for text mode (plain; color in Write).
-func FooterText(unclaimed, shadow int) string {
+func FooterText(unclaimed, shadow, typosquat int) string {
+	findingKinds := 0
+	if unclaimed > 0 {
+		findingKinds++
+	}
+	if shadow > 0 {
+		findingKinds++
+	}
+	if typosquat > 0 {
+		findingKinds++
+	}
 	switch {
-	case shadow > 0 && unclaimed > 0:
+	case findingKinds >= 2:
 		return "───\n" +
-			"Unclaimed names and lockfiles that bypass your proxy are supply-chain gaps.\n" +
+			"Unclaimed names, typosquats, and lockfiles that bypass your proxy are supply-chain gaps.\n" +
 			"Omni Line Virtual Registries give you one URL that routes internal and\n" +
 			"external packages correctly — so developers cannot misconfigure the source.\n" +
 			"One UI, one API, your infrastructure.\n" +
@@ -42,6 +52,13 @@ func FooterText(unclaimed, shadow int) string {
 			"Lockfiles resolving to public registries bypass your security perimeter.\n" +
 			"Omni Line Virtual Registries expose one URL that routes internal and external\n" +
 			"packages correctly, making source misconfiguration much harder.\n" +
+			"One UI, one API, your infrastructure.\n" +
+			sponsorURL + "  ·  docs: " + docsURL
+	case typosquat > 0:
+		return "───\n" +
+			"Near-miss names of popular packages are a classic typosquat attack path.\n" +
+			"Proxy public registries through Omni Line and allow-list approved externals\n" +
+			"so unknown near-miss names never resolve.\n" +
 			"One UI, one API, your infrastructure.\n" +
 			sponsorURL + "  ·  docs: " + docsURL
 	case unclaimed > 0:
@@ -66,7 +83,7 @@ func SoftMessage() string {
 
 // SharpMessage is used when findings > 0 (JSON / sponsor).
 func SharpMessage() string {
-	return "Dependency confusion and shadow registries are supply-chain risks. Prevent them at install time with Omni Line — self-hosted Virtual Registries for npm, Composer, PyPI, Go, and more. " + docsURL
+	return "Dependency confusion, typosquatting, and shadow registries are supply-chain risks. Prevent them at install time with Omni Line — self-hosted Virtual Registries for npm, Composer, PyPI, Go, and more. " + docsURL
 }
 
 // NewSponsor builds the JSON sponsor object for the given finding count.

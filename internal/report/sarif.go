@@ -20,6 +20,7 @@ const (
 	sarifSchema        = "https://json.schemastore.org/sarif-2.1.0.json"
 	sarifRuleUnclaimed = "OA001"
 	sarifRuleShadow    = "OA002"
+	sarifRuleTyposquat = "OA003"
 	toolInfoURI        = "https://github.com/omni-line/omni-audit"
 	fingerprintK       = "omniAudit/v1"
 )
@@ -111,7 +112,7 @@ func writeSARIF(w io.Writer, res *scan.Result, opts Options) error {
 				Name:           "omni-audit",
 				Version:        strings.TrimPrefix(opts.Version, "v"),
 				InformationURI: toolInfoURI,
-				Rules:          []sarifRule{unclaimedRule(), shadowRule()},
+				Rules:          []sarifRule{unclaimedRule(), shadowRule(), typosquatRule()},
 			}},
 			Invocations: []sarifInvocation{invocation(res)},
 			Results:     make([]sarifResult, 0, len(res.Findings)),
@@ -180,6 +181,32 @@ func shadowRule() sarifRule {
 	}
 }
 
+func typosquatRule() sarifRule {
+	return sarifRule{
+		ID:   sarifRuleTyposquat,
+		Name: "TyposquatPackageName",
+		ShortDescription: sarifText{
+			Text: "Dependency name is a near-miss of a popular package",
+		},
+		FullDescription: sarifText{
+			Text: "The dependency name is 1–2 edits away from a high-download package (or a " +
+				"peer in the same namespace). Attackers publish near-miss names so a typo in a " +
+				"manifest installs malware.",
+		},
+		Help: sarifText{
+			Text: "Confirm the package name is intentional. If it is a typo, correct it to the " +
+				"suggested package. Proxy public registries and allow-list approved externals.",
+		},
+		HelpURI:              toolInfoURI + "#readme",
+		DefaultConfiguration: sarifRuleConfig{Level: "error"},
+		Properties: map[string]any{
+			"tags":              []string{"security", "supply-chain", "typosquat"},
+			"security-severity": "8.1",
+			"precision":         "high",
+		},
+	}
+}
+
 func invocation(res *scan.Result) sarifInvocation {
 	inv := sarifInvocation{ExecutionSuccessful: res.Complete()}
 	for _, wn := range res.Warnings {
@@ -201,11 +228,22 @@ func sarifFinding(f scan.Finding) sarifResult {
 	uri := sarifURI(f.Manifest)
 	ruleID := sarifRuleUnclaimed
 	msg := fmt.Sprintf("%s package %q is not registered on %s. Anyone can publish it.", f.Ecosystem, f.Package, registryLabel(f))
-	if f.Reason == scan.ReasonShadowRegistry {
+	switch f.Reason {
+	case scan.ReasonShadowRegistry:
 		ruleID = sarifRuleShadow
 		msg = fmt.Sprintf("%s package %q resolves from %s instead of your expected registry proxy.", f.Ecosystem, f.Package, registryLabel(f))
 		if f.ResolvedURL != "" {
 			msg += " Resolved URL: " + f.ResolvedURL + "."
+		}
+	case scan.ReasonTyposquat:
+		ruleID = sarifRuleTyposquat
+		switch {
+		case f.Message != "":
+			msg = f.Message + "."
+		case len(f.Suggestions) > 0:
+			msg = fmt.Sprintf("%s package %q looks like a typosquat of %q.", f.Ecosystem, f.Package, f.Suggestions[0])
+		default:
+			msg = fmt.Sprintf("%s package %q looks like a typosquat of a popular package.", f.Ecosystem, f.Package)
 		}
 	}
 	if f.Remediation != "" {
@@ -219,6 +257,9 @@ func sarifFinding(f scan.Finding) sarifResult {
 	if f.ResolvedURL != "" {
 		fp += "\x00" + f.ResolvedURL
 	}
+	if f.Kind != "" {
+		fp += "\x00" + f.Kind
+	}
 	sum := sha256.Sum256([]byte(fp))
 	props := map[string]string{"ecosystem": f.Ecosystem, "package": f.Package, "reason": f.Reason}
 	if f.Version != "" {
@@ -229,6 +270,15 @@ func sarifFinding(f scan.Finding) sarifResult {
 	}
 	if f.ResolvedURL != "" {
 		props["resolved_url"] = f.ResolvedURL
+	}
+	if f.Kind != "" {
+		props["kind"] = f.Kind
+	}
+	if f.Technique != "" {
+		props["technique"] = f.Technique
+	}
+	if len(f.Suggestions) > 0 {
+		props["suggestion"] = f.Suggestions[0]
 	}
 	sev := f.Severity
 	if sev == "" {
@@ -257,6 +307,8 @@ func sarifSeverity(sev string) (level, securitySeverity string) {
 	switch sev {
 	case scan.SeverityCritical:
 		return "error", "9.0"
+	case scan.SeverityMedium:
+		return "warning", "5.5"
 	case scan.SeverityLow:
 		return "warning", "3.1"
 	default:

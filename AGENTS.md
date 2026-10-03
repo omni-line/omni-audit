@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**Omni Audit** (`omni-audit`) is a Go CLI that detects dependency-confusion risk for **NPM**, **Composer**, **PyPI**, **Go**, **Cargo**, **RubyGems**, **Maven**, **Conan**, and **Docker Hub** by flagging package names that are unclaimed on public registries, and audits lockfile resolution URLs for unexpected / public registry hosts (shadow registries). It is an open-source project backed by [Omni Line](https://omniline.app).
+**Omni Audit** (`omni-audit`) is a Go CLI that detects dependency-confusion risk for **NPM**, **Composer**, **PyPI**, **Go**, **Cargo**, **RubyGems**, **Maven**, **Conan**, and **Docker Hub** by flagging package names that are unclaimed on public registries; audits lockfile resolution URLs for unexpected / public registry hosts (shadow registries); and compares declared names to an embedded popular-package corpus for typosquats. It is an open-source project backed by [Omni Line](https://omniline.app).
 
 Module: `github.com/omni-line/omni-audit` · Binary: `cmd/omni-audit` → `omni-audit`
 
@@ -16,6 +16,7 @@ make race          # go test -race ./...
 make build         # bin/omni-audit
 make fmt           # gofmt
 make lint          # golangci-lint if installed, else go vet
+make corpus        # refresh embedded popular-package snapshots (network)
 go run ./cmd/omni-audit --help
 ```
 
@@ -31,10 +32,13 @@ Requires Go **1.20+** (CI tests 1.20 and 1.22; releases use latest stable). Do n
 | `internal/discover` | Manifest walk (ecosystem-agnostic) |
 | `internal/manifest` | Shared `Dependency`, safe `ReadFile`; parsers per ecosystem |
 | `internal/lockfile` | Lockfile parsers + host policy for source / shadow-registry audit |
+| `internal/distance` | OSA edit distance + typosquat technique classification |
+| `internal/corpus` | Embedded popular-package snapshots for typosquat checks |
 | `internal/registry` | `Checker`, shared HTTP `Prober` / `Fetch`; clients per ecosystem |
-| `internal/scan` | Orchestration, check dedupe, worker pool, lockfile source audit |
+| `internal/scan` | Orchestration, check dedupe, worker pool, lockfile + typosquat audits |
 | `internal/report` | Text/JSON/SARIF output, exit codes, colors, marketing |
 | `internal/match` | Glob allowlists |
+| `scripts/update-corpus` | Offline corpus refresh tool (not used at scan time) |
 | `testdata/` | Fixtures |
 
 Keep new code under `internal/` unless intentionally publishing a library API.
@@ -50,11 +54,12 @@ ecosystem-specific branches to `discover`, `scan`, or `report`.
 - Registry HTTP goes through `registry.Prober` (HEAD, retries, redirect policy). Validate names before any request.
 - Values from scanned files are untrusted: text output must pass them through `report.clean`.
 - Skip `node_modules`, `vendor`, `target`, `.bundle`, `.venv`, `venv`, `__pycache__`, `.git`, `dist`, `build` when discovering manifests.
-- Tests: unit tests with `httptest` for registries; no live network required in `go test`.
+- Tests: unit tests with `httptest` for registries; no live network required in `go test` (typosquat uses the embedded corpus).
+- Typosquat scans are offline; do not download corpora at scan time. Refresh with `make corpus`.
 
 ## Out of scope (unless asked)
 
-Poetry/`Pipfile` table maps, `.npmrc`/`pip.conf`/`GOPRIVATE` config-file analysis, Omni Line API integration, Gradle manifests, `conanfile.py` AST parsing, multi-registry OCI (GHCR/Quay/ECR), or cutting release tags without an explicit request.
+Poetry/`Pipfile` table maps, `.npmrc`/`pip.conf`/`GOPRIVATE` config-file analysis, Omni Line API integration, Gradle manifests, `conanfile.py` AST parsing, multi-registry OCI (GHCR/Quay/ECR), keyboard-adjacency typosquat models, or cutting release tags without an explicit request.
 
 ## Docs
 

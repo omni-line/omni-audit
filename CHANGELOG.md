@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-10-03
+
+### Added
+
+- Typosquat detection: compare declared dependency names to an embedded popular-package corpus (and namespace peers) and report 1–2-edit near-misses as `reason=typosquat`
+- SARIF rule `OA003` (`TyposquatPackageName`); additive finding fields `kind`, `distance`, `suggestions`, `technique`, `suggestion_url`, `message`, `target_rank`
+- Flags `--distance`, `--allow`, `--scope`, `--no-scope-peers`, and `--no-typosquat`
+- Severity value `medium` for lower-confidence typosquat peer findings; `--min-severity` accepts `medium`
+- `make corpus` / `scripts/update-corpus` to refresh embedded snapshots
+
+### Changed
+
+- Default `omni-audit` run now performs dependency-confusion, typosquat, and lockfile source auditing in one pass
+- Text/JSON marketing copy covers unclaimed names, typosquats, and shadow-registry bypasses
+
 ## [0.6.0] — 2026-10-03
 
 ### Added

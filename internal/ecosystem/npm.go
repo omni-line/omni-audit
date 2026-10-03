@@ -22,7 +22,10 @@ func NPM(c registry.Checker) Ecosystem {
 		Parse: func(_ string, data []byte) ([]manifest.Dependency, error) {
 			return npm.Parse(data)
 		},
-		PackageURL: regnpm.PackageURL,
+		Normalize:     npm.Normalize,
+		PeerNamespace: npm.Split,
+		Implied:       impliedNPM,
+		PackageURL:    regnpm.PackageURL,
 		Remediation: "Claim the name (or its @scope as an npm organization) on npmjs.com, " +
 			"and map internal scopes to your private registry in .npmrc.",
 		Checker: c,
@@ -34,4 +37,17 @@ func NPM(c registry.Checker) Ecosystem {
 		})
 	}
 	return eco
+}
+
+// impliedNPM trusts DefinitelyTyped packages for popular libraries.
+// DefinitelyTyped encodes "@scope/pkg" as "@types/scope__pkg".
+func impliedNPM(key string, popular func(string) bool) bool {
+	scope, leaf := npm.Split(key)
+	if scope != "@types" {
+		return false
+	}
+	if s, p, ok := strings.Cut(leaf, "__"); ok {
+		return popular("@" + s + "/" + p)
+	}
+	return popular(leaf)
 }

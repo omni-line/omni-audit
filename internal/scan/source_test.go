@@ -45,7 +45,7 @@ func TestRunFlagsShadowRegistry(t *testing.T) {
 	npmClient.BaseURL = srv.URL
 	ecos := []ecosystem.Ecosystem{ecosystem.NPM(npmClient)}
 
-	res, err := scan.Run(context.Background(), root, scan.Options{Ecosystems: ecos})
+	res, err := scan.Run(context.Background(), root, scan.Options{Ecosystems: ecos, NoTyposquat: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +66,7 @@ func TestRunFlagsShadowRegistry(t *testing.T) {
 	}
 
 	res2, err := scan.Run(context.Background(), root, scan.Options{
+		NoTyposquat:   true,
 		Ecosystems:    ecos,
 		ExpectedHosts: []string{"npm.mycompany.com"},
 	})
@@ -83,8 +84,9 @@ func TestRunFlagsShadowRegistry(t *testing.T) {
 	}
 
 	res3, err := scan.Run(context.Background(), root, scan.Options{
-		Ecosystems: ecos,
-		Lockfiles:  []lockfile.Kind{},
+		NoTyposquat: true,
+		Ecosystems:  ecos,
+		Lockfiles:   []lockfile.Kind{},
 	})
 	if err != nil {
 		t.Fatal(err)

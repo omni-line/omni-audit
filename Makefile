@@ -1,4 +1,4 @@
-.PHONY: build test race cover lint fmt vet vuln clean
+.PHONY: build test race cover lint fmt vet vuln clean corpus
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/omni-line/omni-audit/internal/version.Version=$(VERSION)
@@ -29,6 +29,9 @@ lint:
 
 vuln:
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+corpus:
+	go run ./scripts/update-corpus -out internal/corpus
 
 clean:
 	rm -rf bin dist coverage.out

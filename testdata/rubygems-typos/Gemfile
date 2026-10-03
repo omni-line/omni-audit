@@ -1,0 +1,6 @@
+source "https://rubygems.org"
+
+gem "rails", "~> 7.1"
+gem "railss", "~> 7.0"
+gem "sidekiq"
+gem "local", path: "../local"

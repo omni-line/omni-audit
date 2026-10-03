@@ -36,6 +36,10 @@ issues:
       linters:
         - gosec
         - unparam
+    # Corpus refresh writes committed public snapshots; 0644 is intentional.
+    - path: scripts/
+      linters:
+        - gosec
 
 run:
   timeout: 5m

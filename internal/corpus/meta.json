@@ -1,0 +1,50 @@
+{
+  "ecosystems": {
+    "cargo": {
+      "count": 10000,
+      "source": "https://packages.ecosyste.ms/api/v1/registries/crates.io/packages?sort=downloads&order=desc",
+      "ordered_by": "downloads"
+    },
+    "composer": {
+      "count": 10000,
+      "source": "https://packagist.org/explore/popular.json",
+      "ordered_by": "downloads"
+    },
+    "conan": {
+      "count": 140,
+      "source": "seeded top conan packages (scripts/update-corpus fallback)",
+      "ordered_by": "downloads"
+    },
+    "docker": {
+      "count": 10000,
+      "source": "https://packages.ecosyste.ms/api/v1/registries/hub.docker.com/packages?sort=dependent_repos_count&order=desc",
+      "ordered_by": "downloads"
+    },
+    "maven": {
+      "count": 10000,
+      "source": "https://packages.ecosyste.ms/api/v1/registries/repo1.maven.org/packages?sort=dependent_repos_count&order=desc",
+      "ordered_by": "downloads"
+    },
+    "npm": {
+      "count": 25000,
+      "source": "https://packages.ecosyste.ms/api/v1/registries/npmjs.org/packages?sort=downloads&order=desc",
+      "ordered_by": "downloads"
+    },
+    "pypi": {
+      "count": 10000,
+      "source": "https://hugovk.github.io/top-pypi-packages/top-pypi-packages-30-days.min.json",
+      "ordered_by": "downloads"
+    },
+    "rubygems": {
+      "count": 10000,
+      "source": "https://packages.ecosyste.ms/api/v1/registries/rubygems.org/packages?sort=downloads&order=desc",
+      "ordered_by": "downloads"
+    },
+    "go": {
+      "count": 10000,
+      "source": "https://packages.ecosyste.ms/api/v1/registries/proxy.golang.org/packages?sort=dependent_repos_count&order=desc",
+      "ordered_by": "downloads"
+    }
+  },
+  "generated_at": "2026-10-03T10:07:43Z"
+}
