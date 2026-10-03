@@ -21,8 +21,9 @@ func Maven(c registry.Checker) Ecosystem {
 		Parse: func(_ string, data []byte) ([]manifest.Dependency, error) {
 			return maven.Parse(data)
 		},
-		Normalize:  mavencentral.Normalize,
-		PackageURL: mavencentral.PackageURL,
+		Normalize:     mavencentral.Normalize,
+		PeerNamespace: maven.Split,
+		PackageURL:    mavencentral.PackageURL,
 		Remediation: "Reserve coordinates on Maven Central (or claim the group), and point builds " +
 			"at a private/virtual registry (Omni Line or equivalent).",
 		Checker: c,

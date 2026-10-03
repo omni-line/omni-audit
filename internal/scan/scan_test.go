@@ -67,7 +67,7 @@ func TestRunFindsUnclaimed(t *testing.T) {
 		ecosystem.PyPI(pypiClient),
 	}
 
-	res, err := scan.Run(context.Background(), root, scan.Options{Ecosystems: ecos})
+	res, err := scan.Run(context.Background(), root, scan.Options{Ecosystems: ecos, NoTyposquat: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +90,7 @@ func TestRunFindsUnclaimed(t *testing.T) {
 	}
 
 	res2, err := scan.Run(context.Background(), root, scan.Options{
+		NoTyposquat:    true,
 		Ecosystems:     ecos,
 		SafeNamespaces: match.New("@acme/*", "acme/*"),
 	})
@@ -101,8 +102,9 @@ func TestRunFindsUnclaimed(t *testing.T) {
 	}
 
 	res3, err := scan.Run(context.Background(), root, scan.Options{
-		Ecosystems: ecos,
-		Ignore:     match.New("@acme/*", "acme/*", "acme-*"),
+		NoTyposquat: true,
+		Ecosystems:  ecos,
+		Ignore:      match.New("@acme/*", "acme/*", "acme-*"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +141,8 @@ func TestRunDedupesRegistryChecksAcrossManifests(t *testing.T) {
 
 	checker := &countingChecker{status: registry.NotFound}
 	res, err := scan.Run(context.Background(), root, scan.Options{
-		Ecosystems: []ecosystem.Ecosystem{ecosystem.PyPI(checker)},
+		NoTyposquat: true,
+		Ecosystems:  []ecosystem.Ecosystem{ecosystem.PyPI(checker)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -163,8 +166,9 @@ func TestRunAllowlistMatchesNormalizedName(t *testing.T) {
 
 	checker := &countingChecker{status: registry.NotFound}
 	res, err := scan.Run(context.Background(), root, scan.Options{
-		Ecosystems: []ecosystem.Ecosystem{ecosystem.PyPI(checker)},
-		Ignore:     match.New("acme-*"),
+		NoTyposquat: true,
+		Ecosystems:  []ecosystem.Ecosystem{ecosystem.PyPI(checker)},
+		Ignore:      match.New("acme-*"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +185,8 @@ func TestRunBadManifestIsWarningNotFatal(t *testing.T) {
 
 	checker := &countingChecker{status: registry.NotFound}
 	res, err := scan.Run(context.Background(), root, scan.Options{
-		Ecosystems: []ecosystem.Ecosystem{ecosystem.NPM(checker)},
+		NoTyposquat: true,
+		Ecosystems:  []ecosystem.Ecosystem{ecosystem.NPM(checker)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +205,8 @@ func TestRunRegistryFailureIsWarning(t *testing.T) {
 
 	checker := &countingChecker{status: registry.Unknown, err: errors.New("boom")}
 	res, err := scan.Run(context.Background(), root, scan.Options{
-		Ecosystems: []ecosystem.Ecosystem{ecosystem.NPM(checker)},
+		NoTyposquat: true,
+		Ecosystems:  []ecosystem.Ecosystem{ecosystem.NPM(checker)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +224,8 @@ func TestRunCancelledContext(t *testing.T) {
 	cancel()
 	checker := &countingChecker{status: registry.NotFound}
 	res, err := scan.Run(ctx, root, scan.Options{
-		Ecosystems: []ecosystem.Ecosystem{ecosystem.NPM(checker)},
+		NoTyposquat: true,
+		Ecosystems:  []ecosystem.Ecosystem{ecosystem.NPM(checker)},
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v", err)

@@ -21,6 +21,7 @@ func Go(c registry.Checker) Ecosystem {
 		Parse: func(_ string, data []byte) ([]manifest.Dependency, error) {
 			return gomod.Parse(data)
 		},
+		Normalize:  gomod.Normalize,
 		PackageURL: goproxy.PackageURL,
 		Remediation: "Keep private modules under a domain you control, set GOPRIVATE so the " +
 			"public proxy is never asked, and publish a go-import meta tag for vanity paths.",

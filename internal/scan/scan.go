@@ -22,12 +22,15 @@ const (
 	ReasonUnclaimed = "unclaimed"
 	// ReasonShadowRegistry marks a lockfile resolution outside the expected proxy.
 	ReasonShadowRegistry = "shadow_registry"
+	// ReasonTyposquat marks a name that is a near-miss of a popular package.
+	ReasonTyposquat = "typosquat"
 )
 
 // Finding severities. Additive JSON fields; default for unscoped names is high.
 const (
 	SeverityCritical = "critical"
 	SeverityHigh     = "high"
+	SeverityMedium   = "medium"
 	SeverityLow      = "low"
 )
 
@@ -53,25 +56,32 @@ const RemediationShadow = "Point the package manager at your internal registry p
 // DefaultConcurrency is used when Options.Concurrency is not positive.
 const DefaultConcurrency = 16
 
-// Finding is a reportable audit risk (unclaimed name or unexpected source).
+// Finding is a reportable audit risk (unclaimed name, unexpected source, or typosquat).
 //
 // ecosystem, package, version, manifest, and reason are part of the stable
 // JSON schema; other fields are additive.
 type Finding struct {
-	Ecosystem       string `json:"ecosystem"`
-	Package         string `json:"package"`
-	Version         string `json:"version,omitempty"`
-	Manifest        string `json:"manifest"`
-	Line            int    `json:"line,omitempty"`
-	Group           string `json:"group,omitempty"`
-	Reason          string `json:"reason"`
-	Severity        string `json:"severity,omitempty"`
-	Namespace       string `json:"namespace,omitempty"`
-	NamespaceStatus string `json:"namespace_status,omitempty"`
-	Registry        string `json:"registry,omitempty"`
-	URL             string `json:"url,omitempty"`
-	ResolvedURL     string `json:"resolved_url,omitempty"`
-	Remediation     string `json:"remediation,omitempty"`
+	Ecosystem       string   `json:"ecosystem"`
+	Package         string   `json:"package"`
+	Version         string   `json:"version,omitempty"`
+	Manifest        string   `json:"manifest"`
+	Line            int      `json:"line,omitempty"`
+	Group           string   `json:"group,omitempty"`
+	Reason          string   `json:"reason"`
+	Severity        string   `json:"severity,omitempty"`
+	Namespace       string   `json:"namespace,omitempty"`
+	NamespaceStatus string   `json:"namespace_status,omitempty"`
+	Registry        string   `json:"registry,omitempty"`
+	URL             string   `json:"url,omitempty"`
+	ResolvedURL     string   `json:"resolved_url,omitempty"`
+	Remediation     string   `json:"remediation,omitempty"`
+	Kind            string   `json:"kind,omitempty"`
+	Distance        int      `json:"distance,omitempty"`
+	Suggestions     []string `json:"suggestions,omitempty"`
+	TargetRank      int      `json:"target_rank,omitempty"`
+	Technique       string   `json:"technique,omitempty"`
+	SuggestionURL   string   `json:"suggestion_url,omitempty"`
+	Message         string   `json:"message,omitempty"`
 }
 
 // Warning is a non-fatal issue that may leave the scan incomplete.
@@ -129,6 +139,18 @@ type Options struct {
 	// Lockfiles overrides the default lockfile kinds; nil means lockfile.Default().
 	// An empty non-nil slice disables lockfile source auditing.
 	Lockfiles []lockfile.Kind
+	// NoTyposquat disables offline popular-package / scope-peer typosquat checks.
+	NoTyposquat bool
+	// MaxDistance is the maximum edit distance for typosquat matches (1 or 2).
+	MaxDistance int
+	// Allow lists exact package names treated as safe for typosquat checks.
+	Allow map[string]struct{}
+	// Scopes are namespaces (npm "@org") to peer-check in addition to those
+	// discovered automatically.
+	Scopes []string
+	// NoScopePeers disables automatic namespace peer typosquat checks
+	// (explicit Scopes still apply).
+	NoScopePeers bool
 }
 
 type checkKey struct{ ecosystem, name string }
@@ -164,8 +186,10 @@ var errNotChecked = errors.New("not checked: scan was cancelled")
 func SeverityRank(s string) int {
 	switch s {
 	case SeverityCritical:
-		return 3
+		return 4
 	case SeverityHigh:
+		return 3
+	case SeverityMedium:
 		return 2
 	case SeverityLow:
 		return 1
@@ -177,17 +201,18 @@ func SeverityRank(s string) int {
 // ParseSeverity validates a --min-severity value.
 func ParseSeverity(s string) (string, error) {
 	switch s {
-	case SeverityCritical, SeverityHigh, SeverityLow:
+	case SeverityCritical, SeverityHigh, SeverityMedium, SeverityLow:
 		return s, nil
 	default:
-		return "", errors.New(`invalid severity (want low|high|critical)`)
+		return "", errors.New(`invalid severity (want low|medium|high|critical)`)
 	}
 }
 
 // Run discovers manifests and lockfiles under root, checks each distinct
-// package name once against its public registry, and audits lockfile
-// resolution URLs for unexpected / public registry hosts. On cancellation it
-// returns the partial result together with ctx.Err().
+// package name once against its public registry, audits lockfile resolution
+// URLs for unexpected / public registry hosts, and (by default) compares
+// declared names to an embedded popular-package corpus for typosquats.
+// On cancellation it returns the partial result together with ctx.Err().
 func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 	start := time.Now()
 	if err := ecosystem.ValidateAll(opts.Ecosystems); err != nil {
@@ -325,6 +350,12 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 	}
 
 	auditLockfiles(root, opts, res)
+
+	if typos, err := auditTyposquats(opts, occs); err != nil {
+		return nil, err
+	} else {
+		res.Findings = append(res.Findings, typos...)
+	}
 
 	sortFindings(res.Findings)
 	sortWarnings(res.Warnings)

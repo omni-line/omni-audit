@@ -62,6 +62,11 @@ type config struct {
 	ignore        *match.Matcher
 	exclude       *match.Matcher
 	expectedHosts []string
+	noTyposquat   bool
+	maxDistance   int
+	allow         map[string]struct{}
+	scopes        []string
+	noScopePeers  bool
 }
 
 // errHelp signals that usage was printed on request.
@@ -100,6 +105,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		Exclude:        cfg.exclude,
 		Concurrency:    cfg.concurrency,
 		ExpectedHosts:  cfg.expectedHosts,
+		NoTyposquat:    cfg.noTyposquat,
+		MaxDistance:    cfg.maxDistance,
+		Allow:          cfg.allow,
+		Scopes:         cfg.scopes,
+		NoScopePeers:   cfg.noScopePeers,
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -144,7 +154,7 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 		retries      = fs.Int("retries", registry.DefaultRetries, fmt.Sprintf("retries for transient registry errors (0-%d)", maxRetries))
 		failOn       = fs.String("fail-on", "any", "when to exit 1: any|none")
 		strict       = fs.Bool("strict", false, "exit 2 if any package or manifest could not be verified")
-		minSeverity  = fs.String("min-severity", "low", "minimum finding severity that fails the build: low|high|critical")
+		minSeverity  = fs.String("min-severity", "low", "minimum finding severity that fails the build: low|medium|high|critical")
 		colorMode    = fs.String("color", "auto", "color output: auto|always|never")
 		quiet        = fs.Bool("q", false, "findings only; suppress banner, warnings, summary, and marketing")
 		quietLong    = fs.Bool("quiet", false, "alias for -q")
@@ -153,15 +163,22 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 		verbose      = fs.Bool("v", false, "verbose: show package URLs and all warnings")
 		verboseLong  = fs.Bool("verbose", false, "alias for -v")
 		versionFlag  = fs.Bool("version", false, "print version and exit")
+		noTyposquat  = fs.Bool("no-typosquat", false, "disable offline typosquat checks against the popular-package corpus")
+		maxDistance  = fs.Int("distance", scan.DefaultTyposquatDistance, "maximum edit distance for typosquat matches (1 or 2)")
+		noScopePeers = fs.Bool("no-scope-peers", false, "disable automatic namespace peer typosquat checks")
 		safeNS       stringList
 		ignore       stringList
 		exclude      stringList
 		expectedHost stringList
+		allow        stringList
+		scopes       stringList
 	)
 	fs.Var(&safeNS, "safe-namespace", "glob of namespaces you own; matching packages are skipped (repeatable or comma-separated)")
 	fs.Var(&ignore, "ignore", "package name globs to skip (repeatable or comma-separated)")
 	fs.Var(&exclude, "exclude", "path globs or directory names to skip, relative to the scan root (repeatable or comma-separated)")
 	fs.Var(&expectedHost, "expected-host", "internal registry hostname or URL; lockfile resolutions outside these hosts are findings (repeatable or comma-separated)")
+	fs.Var(&allow, "allow", "exact package names treated as safe for typosquat checks (repeatable or comma-separated)")
+	fs.Var(&scopes, "scope", "namespace to peer-check for typosquats even with --no-scope-peers (e.g. @acme; repeatable)")
 	fs.Usage = func() { usage(fs, stderr) }
 
 	flagArgs, positional, err := splitArgs(fs, args)
@@ -201,7 +218,10 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 		return cfg, false, fmt.Errorf("invalid --fail-on %q (want any|none)", *failOn)
 	}
 	if cfg.minSeverity, err = scan.ParseSeverity(strings.ToLower(*minSeverity)); err != nil {
-		return cfg, false, fmt.Errorf("invalid --min-severity %q (want low|high|critical)", *minSeverity)
+		return cfg, false, fmt.Errorf("invalid --min-severity %q (want low|medium|high|critical)", *minSeverity)
+	}
+	if *maxDistance != 1 && *maxDistance != 2 {
+		return cfg, false, fmt.Errorf("invalid --distance %d (want 1 or 2)", *maxDistance)
 	}
 	if *timeout <= 0 {
 		return cfg, false, fmt.Errorf("invalid --timeout %s (must be positive)", *timeout)
@@ -233,16 +253,27 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 	cfg.verbose = *verbose || *verboseLong
 	cfg.noMarketing = *noMarketing || envTruthy("OMNI_AUDIT_NO_MARKETING")
 	cfg.forceMarket = *forceMarket
+	cfg.noTyposquat = *noTyposquat
+	cfg.maxDistance = *maxDistance
+	cfg.noScopePeers = *noScopePeers
+	cfg.scopes = scopes
+	if len(allow) > 0 {
+		cfg.allow = make(map[string]struct{}, len(allow))
+		for _, name := range allow {
+			cfg.allow[name] = struct{}{}
+		}
+	}
 	return cfg, false, nil
 }
 
 func usage(fs *flag.FlagSet, w io.Writer) {
 	fmt.Fprint(w, `Usage: omni-audit [path] [flags]
 
-Scan a project tree (or a single manifest) for dependency confusion and
-unexpected lockfile package sources across npm, Composer, PyPI, Go, Cargo,
-RubyGems, Maven, Conan, and Docker Hub. Unclaimed public names and resolutions
-to public / non-proxy registries are reported as findings.
+Scan a project tree (or a single manifest) for dependency confusion,
+typosquatted names, and unexpected lockfile package sources across npm,
+Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub. Unclaimed
+public names, near-miss typos of popular packages, and resolutions to public /
+non-proxy registries are reported as findings.
 
 Flags:
 `)

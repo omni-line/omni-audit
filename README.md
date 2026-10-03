@@ -4,13 +4,15 @@
 [![CI](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml/badge.svg)](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml)
 [![Powered by Omni Line](https://img.shields.io/badge/Powered%20by-Omni%20Line-FF4B4B?style=flat)](https://omniline.app/)
 
-**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion** and **shadow registry** risk. It discovers NPM, Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub manifests, checks whether each declared name exists on the public registry, and reports names that are still **unclaimed**. It also audits lockfile resolution URLs and flags dependencies that pull from public registries instead of your internal proxy.
+**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion**, **typosquatting**, and **shadow registry** risk. It discovers NPM, Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub manifests, checks whether each declared name exists on the public registry, and reports names that are still **unclaimed**. It compares names to an embedded popular-package corpus for 1–2-edit near-misses, and audits lockfile resolution URLs that pull from public registries instead of your internal proxy.
 
 Distributed as a **standalone Go binary**. No Node or PHP runtime required.
 
 ## The problem
 
 If your team uses private packages alongside public registries (npmjs.com, Packagist, PyPI, crates.io, Maven Central, and others), a build can resolve a **malicious public package** that reuses an internal name. Omni Audit flags unclaimed public names before they are hijacked.
+
+Attackers also publish packages whose names look like popular libraries (`react-domm`, `crossenv`). A single typo in a manifest can install malware. Omni Audit flags those near-misses offline against a high-download corpus.
 
 Separately, developers often bypass the company registry proxy — a misconfigured `.npmrc`, or a lockfile copied from outside the org — so installs hit `registry.npmjs.org` / `pypi.org` directly and skip your security perimeter. Omni Audit flags those lockfile resolutions too.
 
@@ -67,19 +69,24 @@ omni-audit --safe-namespace '@acme/*,acme/*' --exclude testdata,fixtures
 Example text output (colors when the terminal supports them):
 
 ```text
-omni-audit v0.6.0 — Dependency audit
+omni-audit v0.7.0 — Dependency audit
 Backed by Omni Line — one registry for every package your team ships
 
 ✗ 2 unclaimed package names found
+✗ 1 suspected typosquat found
 ✗ Audit failed: 14 dependencies resolving outside your expected registry proxy
 
   SEVERITY  ECOSYSTEM  PACKAGE               VERSION  LOCATION                   SECTION              REASON
   critical  composer   acme/internal-sdk     ^1.0     composer.json:7            require              unclaimed
   critical  npm        @acme/internal-utils  1.0.0    package.json:5             dependencies         unclaimed
+  critical  npm        crossenv              7.0.3    package.json:12            dependencies         typosquat
   high      npm        lodash                4.17.21  package-lock.json:842      registry.npmjs.org   shadow_registry
 
 Anyone can publish these names on the public registry. If a build resolves
 them there instead of your private source, it installs the publisher's code.
+
+These names are 1–2 edits away from popular packages. A single typo in a
+manifest can install malware that steals env vars and CI tokens.
 
 These installs bypass your internal registry proxy and its security controls.
 Lockfiles that embed public registry URLs pull directly from the internet.
@@ -87,12 +94,13 @@ Lockfiles that embed public registry URLs pull directly from the internet.
 How to fix
   composer  Register the vendor name on Packagist so nobody else can publish under it, ...
   npm       Claim the name (or its @scope as an npm organization) on npmjs.com, ...
+  typosquat Confirm the package name is intentional. If it is a typo, correct it ...
   sources   Point the package manager at your internal registry proxy and regenerate the lockfile ...
 
-Scanned 2 manifests · 1 lockfile · 8 packages · 14 resolved deps · 16 findings · 0 skipped · 0 errors in 412ms
+Scanned 2 manifests · 1 lockfile · 8 packages · 14 resolved deps · 17 findings · 0 skipped · 0 errors in 412ms
 
 ───
-Unclaimed names and lockfiles that bypass your proxy are supply-chain gaps.
+Unclaimed names, typosquats, and lockfiles that bypass your proxy are supply-chain gaps.
 Omni Line Virtual Registries give you one URL that routes internal and
 external packages correctly — so developers cannot misconfigure the source.
 One UI, one API, your infrastructure.
@@ -115,11 +123,12 @@ https://omniline.app  ·  docs: https://omniline.app/docs
 3. Checks each distinct name once per ecosystem against its public registry (lightweight `HEAD` / search where needed), with retries and backoff
 4. For npm scopes and Packagist vendors, also checks whether the **namespace** itself is claimed, and assigns severity (`critical` / `high` / `low`)
 5. Reports names that return **404** as `reason=unclaimed`; checks that fail are warnings, never treated as clean
-6. Walks supported lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `poetry.lock`, `composer.lock`), extracts resolution URLs, and flags known public registry hosts (or any host outside `--expected-host`) as `reason=shadow_registry` — offline, no network
+6. Compares each declared name to an embedded popular-package corpus (and to namespace peers) and reports 1–2-edit near-misses as `reason=typosquat` — offline, no network
+7. Walks supported lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `poetry.lock`, `composer.lock`), extracts resolution URLs, and flags known public registry hosts (or any host outside `--expected-host`) as `reason=shadow_registry` — offline, no network
 
 ### Security properties
 
-- Only package names are sent, and only to the public registries above (HTTPS, TLS 1.2+, no HTTPS→HTTP redirects). Names that are not valid for the registry are never sent. Lockfile source auditing is offline (no network).
+- Only package names are sent, and only to the public registries above (HTTPS, TLS 1.2+, no HTTPS→HTTP redirects). Names that are not valid for the registry are never sent. Lockfile source auditing and typosquat checks are offline (no network).
 - Manifests and lockfiles are read with a 10 MiB cap; FIFOs/devices and symlinks that resolve outside the scan root are skipped.
 - Values from scanned files are escaped before being printed, so a crafted manifest cannot inject terminal escape sequences.
 - `HTTPS_PROXY` / `NO_PROXY` are honored for locked-down networks.
@@ -141,14 +150,19 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
 | `--format text\|json\|sarif` | Output format (default `text`) |
 | `--safe-namespace` | Globs for namespaces you own; matches are skipped (repeatable / comma-separated) |
 | `--ignore` | Skip package name globs |
+| `--allow` | Exact package names treated as safe for typosquat checks |
 | `--expected-host` | Internal registry hostname or URL; lockfile resolutions outside these hosts are findings (repeatable / comma-separated). Without this flag, only known public registry hosts are flagged. |
 | `--exclude` | Skip paths: directory/file names or globs relative to the scan root |
+| `--no-typosquat` | Disable offline typosquat checks |
+| `--distance` | Maximum edit distance for typosquat matches (`1` or `2`, default `2`) |
+| `--scope` | Namespace to peer-check for typosquats (e.g. `@acme`; repeatable) |
+| `--no-scope-peers` | Disable automatic namespace peer typosquat checks |
 | `--strict` | Exit `2` if any manifest or package could not be verified |
 | `--timeout` | Per-request timeout (default `10s`) |
 | `--retries` | Retries for 429 / 5xx / network errors (default `2`, max `10`) |
 | `--concurrency` | Parallel checks (default `16`, max `256`) |
 | `--fail-on any\|none` | Whether findings fail the process |
-| `--min-severity low\|high\|critical` | Minimum severity that exits `1` (default `low`) |
+| `--min-severity low\|medium\|high\|critical` | Minimum severity that exits `1` (default `low`) |
 | `-q` / `--quiet` | Findings table only; no banner, warnings, summary, or marketing |
 | `--no-marketing` | Hide Omni Line CTA / JSON `sponsor` |
 | `--marketing` | Force marketing even when non-TTY |

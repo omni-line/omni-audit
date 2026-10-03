@@ -187,3 +187,18 @@ func artifactLine(data []byte, artifactID string) int {
 	}
 	return manifest.LineAt(data, off)
 }
+
+// Normalize lowercases groupId:artifactId.
+func Normalize(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// Split returns groupId and artifactId.
+func Split(name string) (namespace, leaf string) {
+	name = Normalize(name)
+	i := strings.IndexByte(name, ':')
+	if i <= 0 || i == len(name)-1 {
+		return "", name
+	}
+	return name[:i], name[i+1:]
+}

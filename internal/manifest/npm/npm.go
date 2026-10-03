@@ -85,6 +85,25 @@ func resolve(key, spec string) (name, version string, ok bool) {
 	return key, spec, true
 }
 
+// Normalize returns the comparison key for an npm name. The registry only
+// accepts lowercase names for new packages, so case is not significant.
+func Normalize(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// Split separates "@org/pkg" into ("@org", "pkg"). Unscoped names return
+// ("", name).
+func Split(name string) (scope, leaf string) {
+	if !strings.HasPrefix(name, "@") {
+		return "", name
+	}
+	i := strings.Index(name, "/")
+	if i <= 1 || i+1 >= len(name) {
+		return "", name
+	}
+	return name[:i], name[i+1:]
+}
+
 func sortedKeys(m map[string]string) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

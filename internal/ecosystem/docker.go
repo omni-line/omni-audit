@@ -18,11 +18,25 @@ func Docker(c registry.Checker) Ecosystem {
 		IsManifest: isDockerManifest,
 		Parse:      parseDockerManifest,
 		Normalize:  dockerhub.Normalize,
+		CorpusKey:  dockerCorpusKey,
 		PackageURL: dockerhub.PackageURL,
 		Remediation: "Use a private registry hostname for internal images, claim the Docker Hub " +
 			"namespace/repo, and prefer digest pins.",
 		Checker: c,
 	}
+}
+
+// dockerCorpusKey maps Hub identities so official images (library/nginx) and
+// corpus snapshots (bare "nginx") share one key for typosquat matching.
+func dockerCorpusKey(name string) string {
+	n := dockerhub.Normalize(name)
+	if n == "" {
+		return ""
+	}
+	if !strings.Contains(n, "/") {
+		return "library/" + n
+	}
+	return n
 }
 
 func isDockerManifest(rel string) bool {

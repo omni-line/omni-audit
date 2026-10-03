@@ -45,10 +45,27 @@ type Ecosystem struct {
 	// NamespaceChecker reports whether a namespace is claimed. Optional;
 	// when set with Namespace, findings get severity from ownership.
 	NamespaceChecker registry.Checker
+	// PeerNamespace splits a name into namespace + leaf for typosquat
+	// scope-peer checks (npm "@org"/pkg, Composer vendor/pkg, Maven g:a).
+	PeerNamespace func(name string) (namespace, leaf string)
+	// Implied reports whether a normalized name is legitimate because a
+	// related popular package exists (npm @types/x for popular x).
+	Implied func(key string, popular func(key string) bool) bool
+	// CorpusKey maps a package name for typosquat corpus lookup. When nil,
+	// Key is used. Docker uses this to map official images into library/.
+	CorpusKey func(name string) string
 	// Remediation is short, vendor-neutral advice for an unclaimed name.
 	Remediation string
 	// Checker queries the public registry.
 	Checker registry.Checker
+}
+
+// TypoKey returns the identity used for typosquat corpus comparison.
+func (e Ecosystem) TypoKey(name string) string {
+	if e.CorpusKey != nil {
+		return e.CorpusKey(name)
+	}
+	return e.Key(name)
 }
 
 // Validate reports missing required fields.

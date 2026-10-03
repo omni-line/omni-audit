@@ -22,8 +22,9 @@ func Composer(c registry.Checker) Ecosystem {
 		Parse: func(_ string, data []byte) ([]manifest.Dependency, error) {
 			return composer.Parse(data)
 		},
-		Normalize:  packagist.Normalize,
-		PackageURL: packagist.PackageURL,
+		Normalize:     packagist.Normalize,
+		PeerNamespace: composer.Split,
+		PackageURL:    packagist.PackageURL,
 		Remediation: "Register the vendor name on Packagist so nobody else can publish under it, " +
 			"and declare your private repository in composer.json \"repositories\".",
 		Checker: c,

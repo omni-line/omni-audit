@@ -1,0 +1,10 @@
+{
+  "name": "fixture-typos",
+  "dependencies": {
+    "crossenv": "7.0.3",
+    "react-domm": "18.2.0",
+    "lodash": "4.17.21",
+    "@acme/auth": "1.0.0",
+    "@acme/authh": "1.0.0"
+  }
+}

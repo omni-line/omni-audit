@@ -133,3 +133,8 @@ func looksLikeModulePath(p string) bool {
 	}
 	return true
 }
+
+// Normalize returns the module path trimmed (paths are case-sensitive).
+func Normalize(name string) string {
+	return strings.TrimSpace(name)
+}
