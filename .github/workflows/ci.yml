@@ -52,12 +52,13 @@ jobs:
       - name: Test
         run: go test -race -count=1 ./...
 
-      # Measure coverage without -race (race instrumentation under-counts on some
-      # Go versions). Linux-only: PowerShell splits -coverprofile=coverage.out.
+      # Measure coverage without -race. Scope to ./internal/... so cmd/ and
+      # scripts/ (no tests) are not reported as 0% on Go 1.22+. Linux-only:
+      # PowerShell splits -coverprofile=coverage.out.
       - name: Coverage gate
         if: runner.os == 'Linux' && matrix.go-version == '1.22.x'
         run: |
-          go test -coverprofile=coverage.out -count=1 ./...
+          go test -coverprofile=coverage.out -count=1 ./internal/...
           total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $NF}' | tr -d '%')
           echo "total: ${total}% (minimum 80%)"
           awk -v t="$total" 'BEGIN { if ((t+0) < 80) { printf "coverage %.1f%% is below 80%%\n", t; exit 1 } }'
