@@ -64,14 +64,14 @@ func TestInvalidNamesNeverHitNetwork(t *testing.T) {
 }
 
 func TestNormalize(t *testing.T) {
-	cases := map[string]string{
-		"Rails":      "rails",
-		"NOKOGIRI":   "nokogiri",
-		"  Foo-Bar ": "foo-bar",
+	cases := []struct{ in, want string }{
+		{"Rails", "rails"},
+		{"NOKOGIRI", "nokogiri"},
+		{"  Foo-Bar ", "foo-bar"},
 	}
-	for in, want := range cases {
-		if got := regruby.Normalize(in); got != want {
-			t.Errorf("Normalize(%q)=%q want %q", in, got, want)
+	for _, tc := range cases {
+		if got := regruby.Normalize(tc.in); got != tc.want {
+			t.Errorf("Normalize(%q)=%q want %q", tc.in, got, tc.want)
 		}
 	}
 }
