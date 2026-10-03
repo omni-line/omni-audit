@@ -74,6 +74,7 @@ type column struct {
 
 func writeFindingsTable(w io.Writer, c Palette, findings []scan.Finding, verbose bool) {
 	cols := []column{
+		{"SEVERITY", severityStyle(c)},
 		{"ECOSYSTEM", c.Yellow},
 		{"PACKAGE", c.Bold},
 		{"VERSION", c.Dim},
@@ -90,7 +91,11 @@ func writeFindingsTable(w io.Writer, c Palette, findings []scan.Finding, verbose
 		if f.Line > 0 {
 			loc += ":" + strconv.Itoa(f.Line)
 		}
-		rows[i] = []string{clean(f.Ecosystem), clean(f.Package), clean(version), clean(loc), clean(f.Group)}
+		sev := f.Severity
+		if sev == "" {
+			sev = scan.SeverityHigh
+		}
+		rows[i] = []string{clean(sev), clean(f.Ecosystem), clean(f.Package), clean(version), clean(loc), clean(f.Group)}
 	}
 
 	widths := make([]int, len(cols))
@@ -221,6 +226,19 @@ func plural(n int, one, many string) string {
 		return "1 " + one
 	}
 	return strconv.Itoa(n) + " " + many
+}
+
+func severityStyle(c Palette) func(string) string {
+	return func(s string) string {
+		switch s {
+		case scan.SeverityCritical:
+			return c.BoldRed(s)
+		case scan.SeverityHigh:
+			return c.BoldYellow(s)
+		default:
+			return c.Dim(s)
+		}
+	}
 }
 
 func colorFooter(c Palette, findingCount int) string {

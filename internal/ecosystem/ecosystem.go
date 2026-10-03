@@ -12,10 +12,15 @@ import (
 
 	"github.com/omni-line/omni-audit/internal/manifest"
 	"github.com/omni-line/omni-audit/internal/registry"
+	"github.com/omni-line/omni-audit/internal/registry/conancenter"
+	"github.com/omni-line/omni-audit/internal/registry/cratesio"
+	"github.com/omni-line/omni-audit/internal/registry/dockerhub"
 	"github.com/omni-line/omni-audit/internal/registry/goproxy"
+	"github.com/omni-line/omni-audit/internal/registry/mavencentral"
 	regnpm "github.com/omni-line/omni-audit/internal/registry/npm"
 	"github.com/omni-line/omni-audit/internal/registry/packagist"
 	regpypi "github.com/omni-line/omni-audit/internal/registry/pypi"
+	regruby "github.com/omni-line/omni-audit/internal/registry/rubygems"
 )
 
 // Ecosystem describes one package ecosystem end to end.
@@ -34,6 +39,12 @@ type Ecosystem struct {
 	Normalize func(name string) string
 	// PackageURL returns the public web page for a package name.
 	PackageURL func(name string) string
+	// Namespace extracts the scope/vendor from a package name when the
+	// ecosystem has namespace-level ownership (npm scopes, Packagist vendors).
+	Namespace func(name string) (ns string, ok bool)
+	// NamespaceChecker reports whether a namespace is claimed. Optional;
+	// when set with Namespace, findings get severity from ownership.
+	NamespaceChecker registry.Checker
 	// Remediation is short, vendor-neutral advice for an unclaimed name.
 	Remediation string
 	// Checker queries the public registry.
@@ -79,11 +90,18 @@ func (e Ecosystem) URL(name string) string {
 
 // Default returns every supported ecosystem backed by its public registry.
 func Default(p *registry.Prober) []Ecosystem {
+	npmClient := regnpm.New(p)
+	packagistClient := packagist.New(p)
 	return []Ecosystem{
-		NPM(regnpm.New(p)),
-		Composer(packagist.New(p)),
+		NPM(npmClient),
+		Composer(packagistClient),
 		PyPI(regpypi.New(p)),
 		Go(goproxy.New(p)),
+		Cargo(cratesio.New(p)),
+		RubyGems(regruby.New(p)),
+		Maven(mavencentral.New(p)),
+		Conan(conancenter.New(p)),
+		Docker(dockerhub.New(p)),
 	}
 }
 

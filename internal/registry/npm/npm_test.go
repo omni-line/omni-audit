@@ -71,3 +71,50 @@ func TestValidName(t *testing.T) {
 		}
 	}
 }
+
+func TestScope(t *testing.T) {
+	ns, ok := regnpm.Scope("@acme/internal")
+	if !ok || ns != "acme" {
+		t.Fatalf("got %q ok=%v", ns, ok)
+	}
+	if _, ok := regnpm.Scope("lodash"); ok {
+		t.Fatal("unscoped")
+	}
+}
+
+func TestScopeExists(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/-/v1/search" {
+			w.WriteHeader(http.StatusTeapot)
+			return
+		}
+		q := r.URL.Query().Get("text")
+		w.Header().Set("Content-Type", "application/json")
+		switch q {
+		case "@types/":
+			_, _ = w.Write([]byte(`{"objects":[{"package":{"name":"@types/node"}}]}`))
+		case "@missing/":
+			_, _ = w.Write([]byte(`{"objects":[]}`))
+		default:
+			// Unrelated hit must not count as scope claimed.
+			_, _ = w.Write([]byte(`{"objects":[{"package":{"name":"focus-scope"}}]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := regnpm.New(registry.NewProber(srv.Client(), "test"))
+	c.BaseURL = srv.URL
+
+	st, err := c.ScopeExists(context.Background(), "types")
+	if err != nil || st != registry.Exists {
+		t.Fatalf("types: %v %v", st, err)
+	}
+	st, err = c.ScopeExists(context.Background(), "missing")
+	if err != nil || st != registry.NotFound {
+		t.Fatalf("missing: %v %v", st, err)
+	}
+	st, err = c.ScopeExists(context.Background(), "other")
+	if err != nil || st != registry.NotFound {
+		t.Fatalf("other: %v %v", st, err)
+	}
+}

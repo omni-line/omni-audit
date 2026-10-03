@@ -50,3 +50,39 @@ func TestInvalidNames(t *testing.T) {
 		}
 	}
 }
+
+func TestVendor(t *testing.T) {
+	v, ok := packagist.Vendor("Symfony/Http-Foundation")
+	if !ok || v != "symfony" {
+		t.Fatalf("got %q ok=%v", v, ok)
+	}
+}
+
+func TestVendorExists(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/packages/list.json" {
+			w.WriteHeader(http.StatusTeapot)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("vendor") {
+		case "symfony":
+			_, _ = w.Write([]byte(`{"packageNames":["symfony/http-foundation"]}`))
+		default:
+			_, _ = w.Write([]byte(`{"packageNames":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := packagist.New(registry.NewProber(srv.Client(), "test"))
+	c.ListURL = srv.URL
+
+	st, err := c.VendorExists(context.Background(), "symfony")
+	if err != nil || st != registry.Exists {
+		t.Fatalf("symfony: %v %v", st, err)
+	}
+	st, err = c.VendorExists(context.Background(), "missing-vendor")
+	if err != nil || st != registry.NotFound {
+		t.Fatalf("missing: %v %v", st, err)
+	}
+}

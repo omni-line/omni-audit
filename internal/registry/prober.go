@@ -22,6 +22,8 @@ const (
 	// Bodies are drained up to this size so small responses keep the
 	// connection reusable; larger bodies are abandoned instead of downloaded.
 	maxDrainBytes = 64 << 10
+	// Fetch reads at most this many bytes of a successful response body.
+	maxFetchBytes = 1 << 20
 )
 
 // NewHTTPClient returns a client suited to registry probing: TLS 1.2+,
@@ -119,6 +121,89 @@ func (p *Prober) Probe(ctx context.Context, rawURL string) (Status, error) {
 		return Unknown, fmt.Errorf("%w (gave up after %d attempts)", last.err, p.Retries+1)
 	}
 	return Unknown, last.err
+}
+
+// Fetch GETs rawURL and returns the response body. It retries transient
+// failures (network errors, 429, 5xx) with the same backoff as Probe.
+// 2xx yields the body and Exists; 404/410 yields nil and NotFound; any
+// other status is Unknown with a non-nil error. Bodies larger than 1 MiB
+// are truncated.
+func (p *Prober) Fetch(ctx context.Context, rawURL string) ([]byte, Status, error) {
+	var last fetchAttempt
+	for i := 0; i <= p.Retries; i++ {
+		if i > 0 {
+			if err := sleep(ctx, p.delay(i, last.retryAfter)); err != nil {
+				return nil, Unknown, err
+			}
+		}
+		last = p.fetchOnce(ctx, rawURL)
+		if !last.retry {
+			return last.body, last.status, last.err
+		}
+	}
+	if p.Retries > 0 {
+		return nil, Unknown, fmt.Errorf("%w (gave up after %d attempts)", last.err, p.Retries+1)
+	}
+	return nil, Unknown, last.err
+}
+
+type fetchAttempt struct {
+	body       []byte
+	status     Status
+	err        error
+	retry      bool
+	retryAfter time.Duration
+}
+
+func (p *Prober) fetchOnce(ctx context.Context, rawURL string) fetchAttempt {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return fetchAttempt{status: Unknown, err: err}
+	}
+	if p.UserAgent != "" {
+		req.Header.Set("User-Agent", p.UserAgent)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	client := p.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fetchAttempt{status: Unknown, err: ctxErr}
+		}
+		return fetchAttempt{status: Unknown, err: err, retry: true}
+	}
+	defer resp.Body.Close()
+
+	code := resp.StatusCode
+	switch {
+	case code >= 200 && code < 300:
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes+1))
+		if err != nil {
+			return fetchAttempt{status: Unknown, err: err, retry: true}
+		}
+		if len(body) > maxFetchBytes {
+			body = body[:maxFetchBytes]
+		}
+		return fetchAttempt{body: body, status: Exists}
+	case code == http.StatusNotFound || code == http.StatusGone:
+		_, _ = io.CopyN(io.Discard, resp.Body, maxDrainBytes)
+		return fetchAttempt{status: NotFound}
+	case code == http.StatusTooManyRequests || code >= 500:
+		_, _ = io.CopyN(io.Discard, resp.Body, maxDrainBytes)
+		return fetchAttempt{
+			status:     Unknown,
+			err:        statusError(req, code),
+			retry:      true,
+			retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+		}
+	default:
+		_, _ = io.CopyN(io.Discard, resp.Body, maxDrainBytes)
+		return fetchAttempt{status: Unknown, err: statusError(req, code)}
+	}
 }
 
 func (p *Prober) once(ctx context.Context, method, rawURL string) attempt {

@@ -18,11 +18,26 @@ import (
 // ReasonUnclaimed marks a name that does not exist on the public registry.
 const ReasonUnclaimed = "unclaimed"
 
+// Finding severities. Additive JSON fields; default for unscoped names is high.
+const (
+	SeverityCritical = "critical"
+	SeverityHigh     = "high"
+	SeverityLow      = "low"
+)
+
+// Namespace ownership statuses on findings.
+const (
+	NamespaceClaimed   = "claimed"
+	NamespaceUnclaimed = "unclaimed"
+	NamespaceUnknown   = "unknown"
+)
+
 // Warning kinds.
 const (
-	WarnWalk     = "walk"     // a path could not be walked or was skipped
-	WarnManifest = "manifest" // a manifest could not be read or parsed
-	WarnRegistry = "registry" // a registry check failed; result unknown
+	WarnWalk      = "walk"      // a path could not be walked or was skipped
+	WarnManifest  = "manifest"  // a manifest could not be read or parsed
+	WarnRegistry  = "registry"  // a registry check failed; result unknown
+	WarnNamespace = "namespace" // a namespace ownership check failed
 )
 
 // DefaultConcurrency is used when Options.Concurrency is not positive.
@@ -33,16 +48,19 @@ const DefaultConcurrency = 16
 // ecosystem, package, version, manifest, and reason are part of the stable
 // JSON schema; other fields are additive.
 type Finding struct {
-	Ecosystem   string `json:"ecosystem"`
-	Package     string `json:"package"`
-	Version     string `json:"version,omitempty"`
-	Manifest    string `json:"manifest"`
-	Line        int    `json:"line,omitempty"`
-	Group       string `json:"group,omitempty"`
-	Reason      string `json:"reason"`
-	Registry    string `json:"registry,omitempty"`
-	URL         string `json:"url,omitempty"`
-	Remediation string `json:"remediation,omitempty"`
+	Ecosystem       string `json:"ecosystem"`
+	Package         string `json:"package"`
+	Version         string `json:"version,omitempty"`
+	Manifest        string `json:"manifest"`
+	Line            int    `json:"line,omitempty"`
+	Group           string `json:"group,omitempty"`
+	Reason          string `json:"reason"`
+	Severity        string `json:"severity,omitempty"`
+	Namespace       string `json:"namespace,omitempty"`
+	NamespaceStatus string `json:"namespace_status,omitempty"`
+	Registry        string `json:"registry,omitempty"`
+	URL             string `json:"url,omitempty"`
+	Remediation     string `json:"remediation,omitempty"`
 }
 
 // Warning is a non-fatal issue that may leave the scan incomplete.
@@ -101,6 +119,15 @@ type check struct {
 	err      error
 }
 
+type nsKey struct{ ecosystem, ns string }
+
+type nsCheck struct {
+	eco    *ecosystem.Ecosystem
+	ns     string
+	status registry.Status
+	err    error
+}
+
 type occurrence struct {
 	key      checkKey
 	eco      *ecosystem.Ecosystem
@@ -109,6 +136,31 @@ type occurrence struct {
 }
 
 var errNotChecked = errors.New("not checked: scan was cancelled")
+
+// SeverityRank orders severities for sorting and --min-severity gating.
+// Higher is more severe. Unknown values rank 0.
+func SeverityRank(s string) int {
+	switch s {
+	case SeverityCritical:
+		return 3
+	case SeverityHigh:
+		return 2
+	case SeverityLow:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// ParseSeverity validates a --min-severity value.
+func ParseSeverity(s string) (string, error) {
+	switch s {
+	case SeverityCritical, SeverityHigh, SeverityLow:
+		return s, nil
+	default:
+		return "", errors.New(`invalid severity (want low|high|critical)`)
+	}
+}
 
 // Run discovers manifests under root and checks each distinct package name
 // once against its public registry. On cancellation it returns the partial
@@ -146,6 +198,8 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 
 	checks := make(map[checkKey]*check)
 	var ordered []*check
+	nsChecks := make(map[nsKey]*nsCheck)
+	var nsOrdered []*nsCheck
 	var occs []occurrence
 	for _, m := range walk.Manifests {
 		eco := byName[m.Ecosystem]
@@ -168,18 +222,29 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 				checks[key] = c
 				ordered = append(ordered, c)
 			}
+			if eco.Namespace != nil && eco.NamespaceChecker != nil {
+				if ns, ok := eco.Namespace(d.Name); ok {
+					nk := nsKey{eco.Name, ns}
+					if _, seen := nsChecks[nk]; !seen {
+						nc := &nsCheck{eco: eco, ns: ns, status: registry.Unknown, err: errNotChecked}
+						nsChecks[nk] = nc
+						nsOrdered = append(nsOrdered, nc)
+					}
+				}
+			}
 			occs = append(occs, occurrence{key: key, eco: eco, dep: d, manifest: m.Path})
 		}
 	}
 	res.Stats.UniquePackages = len(ordered)
 
 	runChecks(ctx, ordered, opts.Concurrency)
+	runNamespaceChecks(ctx, nsOrdered, opts.Concurrency)
 
 	for _, o := range occs {
 		if checks[o.key].status != registry.NotFound {
 			continue
 		}
-		res.Findings = append(res.Findings, Finding{
+		f := Finding{
 			Ecosystem:   o.eco.Name,
 			Package:     o.dep.Name,
 			Version:     o.dep.Version,
@@ -187,10 +252,29 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 			Line:        o.dep.Line,
 			Group:       o.dep.Group,
 			Reason:      ReasonUnclaimed,
+			Severity:    SeverityHigh,
 			Registry:    o.eco.Registry,
 			URL:         o.eco.URL(o.dep.Name),
 			Remediation: o.eco.Remediation,
-		})
+		}
+		if o.eco.Namespace != nil && o.eco.NamespaceChecker != nil {
+			if ns, ok := o.eco.Namespace(o.dep.Name); ok {
+				f.Namespace = ns
+				nc := nsChecks[nsKey{o.eco.Name, ns}]
+				switch {
+				case nc == nil || nc.status == registry.Unknown:
+					f.NamespaceStatus = NamespaceUnknown
+					f.Severity = SeverityHigh
+				case nc.status == registry.NotFound:
+					f.NamespaceStatus = NamespaceUnclaimed
+					f.Severity = SeverityCritical
+				case nc.status == registry.Exists:
+					f.NamespaceStatus = NamespaceClaimed
+					f.Severity = SeverityLow
+				}
+			}
+		}
+		res.Findings = append(res.Findings, f)
 	}
 	for _, c := range ordered {
 		if c.status != registry.Unknown {
@@ -202,6 +286,18 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 		}
 		res.Warnings = append(res.Warnings, Warning{
 			Kind: WarnRegistry, Ecosystem: c.eco.Name, Package: c.name, Manifest: c.manifest, Message: msg,
+		})
+	}
+	for _, nc := range nsOrdered {
+		if nc.status != registry.Unknown {
+			continue
+		}
+		msg := "namespace ownership check failed; severity kept at high"
+		if nc.err != nil {
+			msg = nc.err.Error()
+		}
+		res.Warnings = append(res.Warnings, Warning{
+			Kind: WarnNamespace, Ecosystem: nc.eco.Name, Package: nc.ns, Message: msg,
 		})
 	}
 
@@ -276,9 +372,54 @@ feed:
 	wg.Wait()
 }
 
+func runNamespaceChecks(ctx context.Context, checks []*nsCheck, workers int) {
+	if len(checks) == 0 {
+		return
+	}
+	if workers <= 0 {
+		workers = DefaultConcurrency
+	}
+	if workers > len(checks) {
+		workers = len(checks)
+	}
+
+	jobs := make(chan *nsCheck)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for c := range jobs {
+				if ctx.Err() != nil {
+					continue
+				}
+				st, err := c.eco.NamespaceChecker.Exists(ctx, c.ns)
+				if err != nil {
+					st = registry.Unknown
+				}
+				c.status, c.err = st, err
+			}
+		}()
+	}
+
+feed:
+	for _, c := range checks {
+		select {
+		case <-ctx.Done():
+			break feed
+		case jobs <- c:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+}
+
 func sortFindings(fs []Finding) {
 	sort.SliceStable(fs, func(i, j int) bool {
 		a, b := fs[i], fs[j]
+		if ra, rb := SeverityRank(a.Severity), SeverityRank(b.Severity); ra != rb {
+			return ra > rb
+		}
 		if a.Manifest != b.Manifest {
 			return a.Manifest < b.Manifest
 		}

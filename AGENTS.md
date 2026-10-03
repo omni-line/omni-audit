@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**Omni Audit** (`omni-audit`) is a Go CLI that detects dependency-confusion risk for **NPM**, **Composer**, **PyPI**, and **Go modules** by flagging package names that are unclaimed on public registries. It is an open-source project backed by [Omni Line](https://omniline.app).
+**Omni Audit** (`omni-audit`) is a Go CLI that detects dependency-confusion risk for **NPM**, **Composer**, **PyPI**, **Go**, **Cargo**, **RubyGems**, **Maven**, **Conan**, and **Docker Hub** by flagging package names that are unclaimed on public registries. It is an open-source project backed by [Omni Line](https://omniline.app).
 
 Module: `github.com/omni-line/omni-audit` · Binary: `cmd/omni-audit` → `omni-audit`
 
@@ -29,8 +29,8 @@ Requires Go **1.20+** (CI tests 1.20 and 1.22; releases use latest stable). Do n
 | `internal/cli` | Flags, validation, signals |
 | `internal/ecosystem` | Registers ecosystems (manifest detection + parser + registry checker) |
 | `internal/discover` | Manifest walk (ecosystem-agnostic) |
-| `internal/manifest` | Shared `Dependency`, safe `ReadFile`; parsers in `{npm,composer,pypi,gomod}` |
-| `internal/registry` | `Checker`, shared HTTP `Prober`; clients in `{npm,packagist,pypi,goproxy}` |
+| `internal/manifest` | Shared `Dependency`, safe `ReadFile`; parsers per ecosystem |
+| `internal/registry` | `Checker`, shared HTTP `Prober` / `Fetch`; clients per ecosystem |
 | `internal/scan` | Orchestration, check dedupe, worker pool |
 | `internal/report` | Text/JSON/SARIF output, exit codes, colors, marketing |
 | `internal/match` | Glob allowlists |
@@ -48,12 +48,12 @@ ecosystem-specific branches to `discover`, `scan`, or `report`.
 - Exit codes: `0` clean, `1` findings, `2` error (or incomplete scan with `--strict`). Do not break JSON schema fields used by CI (`findings`, `stats`, `sponsor`); new fields are additive, breaking changes bump `schema_version`.
 - Registry HTTP goes through `registry.Prober` (HEAD, retries, redirect policy). Validate names before any request.
 - Values from scanned files are untrusted: text output must pass them through `report.clean`.
-- Skip `node_modules`, `vendor`, `.venv`, `venv`, `__pycache__`, `.git`, `dist`, `build` when discovering manifests.
+- Skip `node_modules`, `vendor`, `target`, `.bundle`, `.venv`, `venv`, `__pycache__`, `.git`, `dist`, `build` when discovering manifests.
 - Tests: unit tests with `httptest` for registries; no live network required in `go test`.
 
 ## Out of scope (unless asked)
 
-Maven/Cargo, Poetry/`Pipfile` table maps, lockfile/`.npmrc`/`GOPRIVATE` policy analysis, Omni Line API integration, or cutting release tags without an explicit request.
+Poetry/`Pipfile` table maps, lockfile/`.npmrc`/`GOPRIVATE` policy analysis, Omni Line API integration, Gradle manifests, `conanfile.py` AST parsing, multi-registry OCI (GHCR/Quay/ECR), or cutting release tags without an explicit request.
 
 ## Docs
 

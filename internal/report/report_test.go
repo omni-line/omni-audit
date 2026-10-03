@@ -87,7 +87,7 @@ func TestTextFindingDetails(t *testing.T) {
 	}
 	for _, want := range []string{
 		"✗ 1 unclaimed package name found",
-		"ECOSYSTEM", "PACKAGE", "LOCATION",
+		"SEVERITY", "ECOSYSTEM", "PACKAGE", "LOCATION",
 		"@acme/secret-pkg",
 		"apps/web/package.json:12",
 		"devDependencies",
@@ -341,6 +341,8 @@ func TestExitCode(t *testing.T) {
 		{"incomplete lenient", incomplete, report.Policy{FailOnFindings: true}, report.ExitOK},
 		{"incomplete strict", incomplete, report.Policy{FailOnFindings: true, Strict: true}, report.ExitError},
 		{"findings win over incomplete", both, report.Policy{FailOnFindings: true, Strict: true}, report.ExitFindings},
+		{"min-severity filters low", &scan.Result{Findings: []scan.Finding{{Severity: scan.SeverityLow, Package: "x"}}}, report.Policy{FailOnFindings: true, MinSeverity: scan.SeverityHigh}, report.ExitOK},
+		{"min-severity keeps critical", &scan.Result{Findings: []scan.Finding{{Severity: scan.SeverityCritical, Package: "x"}}}, report.Policy{FailOnFindings: true, MinSeverity: scan.SeverityHigh}, report.ExitFindings},
 		{"nil", nil, report.Policy{}, report.ExitError},
 	}
 	for _, tc := range cases {

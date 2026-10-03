@@ -56,6 +56,9 @@ type Policy struct {
 	FailOnFindings bool
 	// Strict exits 2 when the scan is incomplete and nothing else failed.
 	Strict bool
+	// MinSeverity is the lowest finding severity that fails the build
+	// (low|high|critical). Empty means low (any finding).
+	MinSeverity string
 }
 
 // Write renders res to stdout (and warnings/marketing to stderr as needed).
@@ -80,13 +83,33 @@ func ExitCode(res *scan.Result, p Policy) int {
 	switch {
 	case res == nil:
 		return ExitError
-	case p.FailOnFindings && len(res.Findings) > 0:
+	case p.FailOnFindings && hasFindingAtLeast(res, p.MinSeverity):
 		return ExitFindings
 	case p.Strict && !res.Complete():
 		return ExitError
 	default:
 		return ExitOK
 	}
+}
+
+func hasFindingAtLeast(res *scan.Result, min string) bool {
+	if res == nil || len(res.Findings) == 0 {
+		return false
+	}
+	if min == "" {
+		min = scan.SeverityLow
+	}
+	threshold := scan.SeverityRank(min)
+	for _, f := range res.Findings {
+		sev := f.Severity
+		if sev == "" {
+			sev = scan.SeverityHigh
+		}
+		if scan.SeverityRank(sev) >= threshold {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldShowMarketing(opts Options) bool {
