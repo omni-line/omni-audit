@@ -237,11 +237,12 @@ func sarifFinding(f scan.Finding) sarifResult {
 		}
 	case scan.ReasonTyposquat:
 		ruleID = sarifRuleTyposquat
-		if f.Message != "" {
+		switch {
+		case f.Message != "":
 			msg = f.Message + "."
-		} else if len(f.Suggestions) > 0 {
+		case len(f.Suggestions) > 0:
 			msg = fmt.Sprintf("%s package %q looks like a typosquat of %q.", f.Ecosystem, f.Package, f.Suggestions[0])
-		} else {
+		default:
 			msg = fmt.Sprintf("%s package %q looks like a typosquat of a popular package.", f.Ecosystem, f.Package)
 		}
 	}
