@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**Omni Audit** (`omni-audit`) is a Go CLI that detects dependency-confusion risk for **NPM**, **Composer**, **PyPI**, **Go**, **Cargo**, **RubyGems**, **Maven**, **Conan**, and **Docker Hub** by flagging package names that are unclaimed on public registries. It is an open-source project backed by [Omni Line](https://omniline.app).
+**Omni Audit** (`omni-audit`) is a Go CLI that detects dependency-confusion risk for **NPM**, **Composer**, **PyPI**, **Go**, **Cargo**, **RubyGems**, **Maven**, **Conan**, and **Docker Hub** by flagging package names that are unclaimed on public registries, and audits lockfile resolution URLs for unexpected / public registry hosts (shadow registries). It is an open-source project backed by [Omni Line](https://omniline.app).
 
 Module: `github.com/omni-line/omni-audit` · Binary: `cmd/omni-audit` → `omni-audit`
 
@@ -30,8 +30,9 @@ Requires Go **1.20+** (CI tests 1.20 and 1.22; releases use latest stable). Do n
 | `internal/ecosystem` | Registers ecosystems (manifest detection + parser + registry checker) |
 | `internal/discover` | Manifest walk (ecosystem-agnostic) |
 | `internal/manifest` | Shared `Dependency`, safe `ReadFile`; parsers per ecosystem |
+| `internal/lockfile` | Lockfile parsers + host policy for source / shadow-registry audit |
 | `internal/registry` | `Checker`, shared HTTP `Prober` / `Fetch`; clients per ecosystem |
-| `internal/scan` | Orchestration, check dedupe, worker pool |
+| `internal/scan` | Orchestration, check dedupe, worker pool, lockfile source audit |
 | `internal/report` | Text/JSON/SARIF output, exit codes, colors, marketing |
 | `internal/match` | Glob allowlists |
 | `testdata/` | Fixtures |
@@ -53,7 +54,7 @@ ecosystem-specific branches to `discover`, `scan`, or `report`.
 
 ## Out of scope (unless asked)
 
-Poetry/`Pipfile` table maps, lockfile/`.npmrc`/`GOPRIVATE` policy analysis, Omni Line API integration, Gradle manifests, `conanfile.py` AST parsing, multi-registry OCI (GHCR/Quay/ECR), or cutting release tags without an explicit request.
+Poetry/`Pipfile` table maps, `.npmrc`/`pip.conf`/`GOPRIVATE` config-file analysis, Omni Line API integration, Gradle manifests, `conanfile.py` AST parsing, multi-registry OCI (GHCR/Quay/ECR), or cutting release tags without an explicit request.
 
 ## Docs
 

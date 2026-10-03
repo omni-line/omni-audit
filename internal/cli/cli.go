@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/omni-line/omni-audit/internal/ecosystem"
+	"github.com/omni-line/omni-audit/internal/lockfile"
 	"github.com/omni-line/omni-audit/internal/match"
 	"github.com/omni-line/omni-audit/internal/registry"
 	"github.com/omni-line/omni-audit/internal/report"
@@ -44,22 +45,23 @@ func (s *stringList) Set(v string) error {
 }
 
 type config struct {
-	root        string
-	format      report.Format
-	color       report.ColorMode
-	timeout     time.Duration
-	concurrency int
-	retries     int
-	failAny     bool
-	strict      bool
-	minSeverity string
-	quiet       bool
-	verbose     bool
-	noMarketing bool
-	forceMarket bool
-	safeNS      *match.Matcher
-	ignore      *match.Matcher
-	exclude     *match.Matcher
+	root          string
+	format        report.Format
+	color         report.ColorMode
+	timeout       time.Duration
+	concurrency   int
+	retries       int
+	failAny       bool
+	strict        bool
+	minSeverity   string
+	quiet         bool
+	verbose       bool
+	noMarketing   bool
+	forceMarket   bool
+	safeNS        *match.Matcher
+	ignore        *match.Matcher
+	exclude       *match.Matcher
+	expectedHosts []string
 }
 
 // errHelp signals that usage was printed on request.
@@ -97,6 +99,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		Ignore:         cfg.ignore,
 		Exclude:        cfg.exclude,
 		Concurrency:    cfg.concurrency,
+		ExpectedHosts:  cfg.expectedHosts,
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -135,28 +138,30 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 	fs.SetOutput(stderr)
 
 	var (
-		format      = fs.String("format", "text", "output format: text|json|sarif")
-		timeout     = fs.Duration("timeout", registry.DefaultTimeout, "per-request registry timeout")
-		concurrency = fs.Int("concurrency", scan.DefaultConcurrency, fmt.Sprintf("parallel registry checks (1-%d)", maxConcurrency))
-		retries     = fs.Int("retries", registry.DefaultRetries, fmt.Sprintf("retries for transient registry errors (0-%d)", maxRetries))
-		failOn      = fs.String("fail-on", "any", "when to exit 1: any|none")
-		strict      = fs.Bool("strict", false, "exit 2 if any package or manifest could not be verified")
-		minSeverity = fs.String("min-severity", "low", "minimum finding severity that fails the build: low|high|critical")
-		colorMode   = fs.String("color", "auto", "color output: auto|always|never")
-		quiet       = fs.Bool("q", false, "findings only; suppress banner, warnings, summary, and marketing")
-		quietLong   = fs.Bool("quiet", false, "alias for -q")
-		noMarketing = fs.Bool("no-marketing", false, "hide Omni Line CTA / JSON sponsor")
-		forceMarket = fs.Bool("marketing", false, "force marketing even when non-TTY")
-		verbose     = fs.Bool("v", false, "verbose: show package URLs and all warnings")
-		verboseLong = fs.Bool("verbose", false, "alias for -v")
-		versionFlag = fs.Bool("version", false, "print version and exit")
-		safeNS      stringList
-		ignore      stringList
-		exclude     stringList
+		format       = fs.String("format", "text", "output format: text|json|sarif")
+		timeout      = fs.Duration("timeout", registry.DefaultTimeout, "per-request registry timeout")
+		concurrency  = fs.Int("concurrency", scan.DefaultConcurrency, fmt.Sprintf("parallel registry checks (1-%d)", maxConcurrency))
+		retries      = fs.Int("retries", registry.DefaultRetries, fmt.Sprintf("retries for transient registry errors (0-%d)", maxRetries))
+		failOn       = fs.String("fail-on", "any", "when to exit 1: any|none")
+		strict       = fs.Bool("strict", false, "exit 2 if any package or manifest could not be verified")
+		minSeverity  = fs.String("min-severity", "low", "minimum finding severity that fails the build: low|high|critical")
+		colorMode    = fs.String("color", "auto", "color output: auto|always|never")
+		quiet        = fs.Bool("q", false, "findings only; suppress banner, warnings, summary, and marketing")
+		quietLong    = fs.Bool("quiet", false, "alias for -q")
+		noMarketing  = fs.Bool("no-marketing", false, "hide Omni Line CTA / JSON sponsor")
+		forceMarket  = fs.Bool("marketing", false, "force marketing even when non-TTY")
+		verbose      = fs.Bool("v", false, "verbose: show package URLs and all warnings")
+		verboseLong  = fs.Bool("verbose", false, "alias for -v")
+		versionFlag  = fs.Bool("version", false, "print version and exit")
+		safeNS       stringList
+		ignore       stringList
+		exclude      stringList
+		expectedHost stringList
 	)
 	fs.Var(&safeNS, "safe-namespace", "glob of namespaces you own; matching packages are skipped (repeatable or comma-separated)")
 	fs.Var(&ignore, "ignore", "package name globs to skip (repeatable or comma-separated)")
 	fs.Var(&exclude, "exclude", "path globs or directory names to skip, relative to the scan root (repeatable or comma-separated)")
+	fs.Var(&expectedHost, "expected-host", "internal registry hostname or URL; lockfile resolutions outside these hosts are findings (repeatable or comma-separated)")
 	fs.Usage = func() { usage(fs, stderr) }
 
 	flagArgs, positional, err := splitArgs(fs, args)
@@ -216,6 +221,9 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 	if cfg.exclude, err = match.Compile(exclude...); err != nil {
 		return cfg, false, fmt.Errorf("--exclude: %w", err)
 	}
+	if cfg.expectedHosts, err = lockfile.NormalizeHosts(expectedHost); err != nil {
+		return cfg, false, fmt.Errorf("--expected-host: %w", err)
+	}
 
 	cfg.timeout = *timeout
 	cfg.concurrency = *concurrency
@@ -231,9 +239,10 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 func usage(fs *flag.FlagSet, w io.Writer) {
 	fmt.Fprint(w, `Usage: omni-audit [path] [flags]
 
-Scan a project tree (or a single manifest) for dependency confusion risks across
-npm, Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub. Names
-that are unclaimed on the public registry are reported as findings.
+Scan a project tree (or a single manifest) for dependency confusion and
+unexpected lockfile package sources across npm, Composer, PyPI, Go, Cargo,
+RubyGems, Maven, Conan, and Docker Hub. Unclaimed public names and resolutions
+to public / non-proxy registries are reported as findings.
 
 Flags:
 `)

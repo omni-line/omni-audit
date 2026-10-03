@@ -10,13 +10,19 @@ import (
 
 	"github.com/omni-line/omni-audit/internal/discover"
 	"github.com/omni-line/omni-audit/internal/ecosystem"
+	"github.com/omni-line/omni-audit/internal/lockfile"
 	"github.com/omni-line/omni-audit/internal/manifest"
 	"github.com/omni-line/omni-audit/internal/match"
 	"github.com/omni-line/omni-audit/internal/registry"
 )
 
-// ReasonUnclaimed marks a name that does not exist on the public registry.
-const ReasonUnclaimed = "unclaimed"
+// Finding reasons.
+const (
+	// ReasonUnclaimed marks a name that does not exist on the public registry.
+	ReasonUnclaimed = "unclaimed"
+	// ReasonShadowRegistry marks a lockfile resolution outside the expected proxy.
+	ReasonShadowRegistry = "shadow_registry"
+)
 
 // Finding severities. Additive JSON fields; default for unscoped names is high.
 const (
@@ -38,12 +44,16 @@ const (
 	WarnManifest  = "manifest"  // a manifest could not be read or parsed
 	WarnRegistry  = "registry"  // a registry check failed; result unknown
 	WarnNamespace = "namespace" // a namespace ownership check failed
+	WarnLockfile  = "lockfile"  // a lockfile could not be read or parsed
 )
+
+// RemediationShadow is the default guidance for unexpected lockfile sources.
+const RemediationShadow = "Point the package manager at your internal registry proxy and regenerate the lockfile so resolved URLs use that host. Omni Line Virtual Registries expose one URL that routes internal and external packages correctly."
 
 // DefaultConcurrency is used when Options.Concurrency is not positive.
 const DefaultConcurrency = 16
 
-// Finding is a reportable dependency confusion risk.
+// Finding is a reportable audit risk (unclaimed name or unexpected source).
 //
 // ecosystem, package, version, manifest, and reason are part of the stable
 // JSON schema; other fields are additive.
@@ -60,6 +70,7 @@ type Finding struct {
 	NamespaceStatus string `json:"namespace_status,omitempty"`
 	Registry        string `json:"registry,omitempty"`
 	URL             string `json:"url,omitempty"`
+	ResolvedURL     string `json:"resolved_url,omitempty"`
 	Remediation     string `json:"remediation,omitempty"`
 }
 
@@ -76,8 +87,12 @@ type Warning struct {
 type Stats struct {
 	// Manifests is the number of manifests discovered.
 	Manifests int `json:"manifests"`
+	// Lockfiles is the number of lockfiles discovered for source auditing.
+	Lockfiles int `json:"lockfiles"`
 	// Packages counts dependency declarations across all manifests.
 	Packages int `json:"packages"`
+	// ResolvedPackages counts lockfile resolutions inspected for source policy.
+	ResolvedPackages int `json:"resolved_packages"`
 	// UniquePackages is the number of distinct names checked on registries.
 	UniquePackages int `json:"unique_packages"`
 	Findings       int `json:"findings"`
@@ -107,6 +122,13 @@ type Options struct {
 	Ignore         *match.Matcher
 	Exclude        *match.Matcher
 	Concurrency    int
+	// ExpectedHosts are optional internal registry hostnames. When set, any
+	// lockfile resolution whose host is not in this list is a finding.
+	// When empty, only known public registry hosts are flagged.
+	ExpectedHosts []string
+	// Lockfiles overrides the default lockfile kinds; nil means lockfile.Default().
+	// An empty non-nil slice disables lockfile source auditing.
+	Lockfiles []lockfile.Kind
 }
 
 type checkKey struct{ ecosystem, name string }
@@ -162,9 +184,10 @@ func ParseSeverity(s string) (string, error) {
 	}
 }
 
-// Run discovers manifests under root and checks each distinct package name
-// once against its public registry. On cancellation it returns the partial
-// result together with ctx.Err().
+// Run discovers manifests and lockfiles under root, checks each distinct
+// package name once against its public registry, and audits lockfile
+// resolution URLs for unexpected / public registry hosts. On cancellation it
+// returns the partial result together with ctx.Err().
 func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 	start := time.Now()
 	if err := ecosystem.ValidateAll(opts.Ecosystems); err != nil {
@@ -301,6 +324,8 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 		})
 	}
 
+	auditLockfiles(root, opts, res)
+
 	sortFindings(res.Findings)
 	sortWarnings(res.Warnings)
 	res.Stats.Findings = len(res.Findings)
@@ -315,6 +340,73 @@ func parse(eco *ecosystem.Ecosystem, m discover.Manifest) ([]manifest.Dependency
 		return nil, err
 	}
 	return eco.Parse(m.Rel, data)
+}
+
+func auditLockfiles(root string, opts Options, res *Result) {
+	kinds := opts.Lockfiles
+	if kinds == nil {
+		kinds = lockfile.Default()
+	}
+	if len(kinds) == 0 {
+		return
+	}
+
+	walk, err := discover.Walk(root, discover.Options{
+		Classify: func(rel string) string {
+			return lockfile.Classify(kinds, rel)
+		},
+		Exclude: opts.Exclude,
+	})
+	if err != nil {
+		res.Warnings = append(res.Warnings, Warning{Kind: WarnLockfile, Message: err.Error()})
+		return
+	}
+	res.Stats.Lockfiles = len(walk.Manifests)
+	for _, p := range walk.Problems {
+		res.Warnings = append(res.Warnings, Warning{Kind: WarnWalk, Manifest: p.Path, Message: p.Err.Error()})
+	}
+
+	for _, m := range walk.Manifests {
+		data, err := manifest.ReadFile(m.Path)
+		if err != nil {
+			res.Warnings = append(res.Warnings, Warning{
+				Kind: WarnLockfile, Ecosystem: m.Ecosystem, Manifest: m.Path, Message: err.Error(),
+			})
+			continue
+		}
+		deps, err := lockfile.ParseFile(kinds, m.Rel, data)
+		if err != nil {
+			res.Warnings = append(res.Warnings, Warning{
+				Kind: WarnLockfile, Ecosystem: m.Ecosystem, Manifest: m.Path, Message: err.Error(),
+			})
+			continue
+		}
+		for _, d := range deps {
+			res.Stats.ResolvedPackages++
+			if allowlisted(opts, d.Name, d.Name) {
+				res.Stats.Skipped++
+				continue
+			}
+			host, _, bad := lockfile.Violation(d.URL, opts.ExpectedHosts)
+			if !bad {
+				continue
+			}
+			res.Findings = append(res.Findings, Finding{
+				Ecosystem:   m.Ecosystem,
+				Package:     d.Name,
+				Version:     d.Version,
+				Manifest:    m.Path,
+				Line:        d.Line,
+				Group:       "resolved",
+				Reason:      ReasonShadowRegistry,
+				Severity:    SeverityHigh,
+				Registry:    host,
+				URL:         d.URL,
+				ResolvedURL: d.URL,
+				Remediation: RemediationShadow,
+			})
+		}
+	}
 }
 
 // allowlisted matches both the declared and the normalized name so that
