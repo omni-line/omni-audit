@@ -17,10 +17,11 @@ import (
 // Only the subset of the schema that omni-audit populates is modeled.
 
 const (
-	sarifSchema  = "https://json.schemastore.org/sarif-2.1.0.json"
-	sarifRuleID  = "OA001"
-	toolInfoURI  = "https://github.com/omni-line/omni-audit"
-	fingerprintK = "omniAudit/v1"
+	sarifSchema        = "https://json.schemastore.org/sarif-2.1.0.json"
+	sarifRuleUnclaimed = "OA001"
+	sarifRuleShadow    = "OA002"
+	toolInfoURI        = "https://github.com/omni-line/omni-audit"
+	fingerprintK       = "omniAudit/v1"
 )
 
 type sarifLog struct {
@@ -110,7 +111,7 @@ func writeSARIF(w io.Writer, res *scan.Result, opts Options) error {
 				Name:           "omni-audit",
 				Version:        strings.TrimPrefix(opts.Version, "v"),
 				InformationURI: toolInfoURI,
-				Rules:          []sarifRule{unclaimedRule()},
+				Rules:          []sarifRule{unclaimedRule(), shadowRule()},
 			}},
 			Invocations: []sarifInvocation{invocation(res)},
 			Results:     make([]sarifResult, 0, len(res.Findings)),
@@ -129,7 +130,7 @@ func writeSARIF(w io.Writer, res *scan.Result, opts Options) error {
 
 func unclaimedRule() sarifRule {
 	return sarifRule{
-		ID:   sarifRuleID,
+		ID:   sarifRuleUnclaimed,
 		Name: "UnclaimedPackageName",
 		ShortDescription: sarifText{
 			Text: "Dependency name is unclaimed on its public registry",
@@ -148,6 +149,32 @@ func unclaimedRule() sarifRule {
 		Properties: map[string]any{
 			"tags":              []string{"security", "supply-chain", "dependency-confusion"},
 			"security-severity": "8.1",
+			"precision":         "high",
+		},
+	}
+}
+
+func shadowRule() sarifRule {
+	return sarifRule{
+		ID:   sarifRuleShadow,
+		Name: "UnexpectedPackageSource",
+		ShortDescription: sarifText{
+			Text: "Lockfile dependency resolves outside the expected registry proxy",
+		},
+		FullDescription: sarifText{
+			Text: "A lockfile records a resolution URL on a public or unexpected registry host. " +
+				"Installs that follow this URL bypass the internal registry proxy and its " +
+				"security controls (shadow registry / broken proxy configuration).",
+		},
+		Help: sarifText{
+			Text: "Configure the package manager to use your internal registry proxy, regenerate " +
+				"the lockfile so resolved URLs use that host, or adopt Omni Line Virtual Registries.",
+		},
+		HelpURI:              toolInfoURI + "#readme",
+		DefaultConfiguration: sarifRuleConfig{Level: "error"},
+		Properties: map[string]any{
+			"tags":              []string{"security", "supply-chain", "shadow-registry"},
+			"security-severity": "7.5",
 			"precision":         "high",
 		},
 	}
@@ -172,7 +199,15 @@ func invocation(res *scan.Result) sarifInvocation {
 
 func sarifFinding(f scan.Finding) sarifResult {
 	uri := sarifURI(f.Manifest)
+	ruleID := sarifRuleUnclaimed
 	msg := fmt.Sprintf("%s package %q is not registered on %s. Anyone can publish it.", f.Ecosystem, f.Package, registryLabel(f))
+	if f.Reason == scan.ReasonShadowRegistry {
+		ruleID = sarifRuleShadow
+		msg = fmt.Sprintf("%s package %q resolves from %s instead of your expected registry proxy.", f.Ecosystem, f.Package, registryLabel(f))
+		if f.ResolvedURL != "" {
+			msg += " Resolved URL: " + f.ResolvedURL + "."
+		}
+	}
 	if f.Remediation != "" {
 		msg += " " + f.Remediation
 	}
@@ -180,13 +215,20 @@ func sarifFinding(f scan.Finding) sarifResult {
 	if f.Line > 0 {
 		loc.PhysicalLocation.Region = &sarifRegion{StartLine: f.Line}
 	}
-	sum := sha256.Sum256([]byte(f.Ecosystem + "\x00" + f.Package + "\x00" + uri))
-	props := map[string]string{"ecosystem": f.Ecosystem, "package": f.Package}
+	fp := f.Ecosystem + "\x00" + f.Package + "\x00" + uri + "\x00" + f.Reason
+	if f.ResolvedURL != "" {
+		fp += "\x00" + f.ResolvedURL
+	}
+	sum := sha256.Sum256([]byte(fp))
+	props := map[string]string{"ecosystem": f.Ecosystem, "package": f.Package, "reason": f.Reason}
 	if f.Version != "" {
 		props["version"] = f.Version
 	}
 	if f.Group != "" {
 		props["group"] = f.Group
+	}
+	if f.ResolvedURL != "" {
+		props["resolved_url"] = f.ResolvedURL
 	}
 	sev := f.Severity
 	if sev == "" {
@@ -202,7 +244,7 @@ func sarifFinding(f scan.Finding) sarifResult {
 	level, secSev := sarifSeverity(sev)
 	props["security-severity"] = secSev
 	return sarifResult{
-		RuleID:              sarifRuleID,
+		RuleID:              ruleID,
 		Level:               level,
 		Message:             sarifText{Text: msg},
 		Locations:           []sarifLocation{loc},

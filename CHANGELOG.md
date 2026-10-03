@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-03
+
+### Added
+
+- Lockfile source audit: parse `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `poetry.lock`, and `composer.lock` resolution URLs and flag dependencies that resolve from known public registries (or outside `--expected-host`)
+- Finding reason `shadow_registry`, JSON field `resolved_url`, SARIF rule `OA002` (`UnexpectedPackageSource`)
+- `--expected-host` to require lockfile resolutions to use specific internal registry hostnames
+
+### Changed
+
+- Default `omni-audit` run now performs dependency-confusion checks and lockfile source auditing in one pass
+- Text/JSON marketing copy covers both unclaimed names and shadow-registry bypasses
+
 ## [0.5.0] — 2026-10-03
 
 ### Added

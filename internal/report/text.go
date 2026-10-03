@@ -27,23 +27,24 @@ func writeText(stdout, stderr io.Writer, res *scan.Result, opts Options) {
 		fmt.Fprintln(mw)
 	}
 
+	unclaimed, shadow := splitFindings(res.Findings)
 	if len(res.Findings) > 0 {
 		if !opts.Quiet {
-			fmt.Fprintln(stdout, c.BoldRed(fmt.Sprintf("✗ %s found", plural(len(res.Findings), "unclaimed package name", "unclaimed package names"))))
+			writeFindingHeadlines(stdout, c, unclaimed, shadow)
 			fmt.Fprintln(stdout)
 		}
 		writeFindingsTable(stdout, c, res.Findings, opts.Verbose)
 		if !opts.Quiet {
-			writeGuidance(stdout, c, res.Findings)
+			writeGuidance(stdout, c, unclaimed, shadow)
 		}
 	} else if !opts.Quiet {
 		switch {
-		case res.Stats.Manifests == 0:
-			fmt.Fprintln(stdout, c.BoldYellow("! No supported dependency manifests found."))
+		case res.Stats.Manifests == 0 && res.Stats.Lockfiles == 0:
+			fmt.Fprintln(stdout, c.BoldYellow("! No supported dependency manifests or lockfiles found."))
 		case !res.Complete():
-			fmt.Fprintln(stdout, c.BoldYellow("! No unclaimed package names found, but the scan is incomplete (see warnings)."))
+			fmt.Fprintln(stdout, c.BoldYellow("! No findings, but the scan is incomplete (see warnings)."))
 		default:
-			fmt.Fprintln(stdout, c.BoldGreen("✓ No unclaimed package names found."))
+			fmt.Fprintln(stdout, c.BoldGreen("✓ No unclaimed names or unexpected package sources found."))
 		}
 	}
 
@@ -63,7 +64,17 @@ func writeText(stdout, stderr io.Writer, res *scan.Result, opts Options) {
 
 	if showMarketing {
 		fmt.Fprintln(mw)
-		fmt.Fprintln(mw, colorFooter(mc, len(res.Findings)))
+		fmt.Fprintln(mw, colorFooter(mc, len(unclaimed), len(shadow)))
+	}
+}
+
+func writeFindingHeadlines(w io.Writer, c Palette, unclaimed, shadow []scan.Finding) {
+	if len(unclaimed) > 0 {
+		fmt.Fprintln(w, c.BoldRed(fmt.Sprintf("✗ %s found", plural(len(unclaimed), "unclaimed package name", "unclaimed package names"))))
+	}
+	if len(shadow) > 0 {
+		fmt.Fprintln(w, c.BoldRed(fmt.Sprintf("✗ Audit failed: %s resolving outside your expected registry proxy",
+			plural(len(shadow), "dependency", "dependencies"))))
 	}
 }
 
@@ -80,6 +91,7 @@ func writeFindingsTable(w io.Writer, c Palette, findings []scan.Finding, verbose
 		{"VERSION", c.Dim},
 		{"LOCATION", c.Cyan},
 		{"SECTION", c.Dim},
+		{"REASON", c.Dim},
 	}
 	rows := make([][]string, len(findings))
 	for i, f := range findings {
@@ -95,7 +107,15 @@ func writeFindingsTable(w io.Writer, c Palette, findings []scan.Finding, verbose
 		if sev == "" {
 			sev = scan.SeverityHigh
 		}
-		rows[i] = []string{clean(sev), clean(f.Ecosystem), clean(f.Package), clean(version), clean(loc), clean(f.Group)}
+		reason := f.Reason
+		if reason == "" {
+			reason = "-"
+		}
+		section := f.Group
+		if f.Reason == scan.ReasonShadowRegistry && f.Registry != "" {
+			section = f.Registry
+		}
+		rows[i] = []string{clean(sev), clean(f.Ecosystem), clean(f.Package), clean(version), clean(loc), clean(section), clean(reason)}
 	}
 
 	widths := make([]int, len(cols))
@@ -134,30 +154,50 @@ func writeFindingsTable(w io.Writer, c Palette, findings []scan.Finding, verbose
 	fmt.Fprintln(w, line(headers, func(_ int, s string) string { return c.Dim(s) }))
 	for i, row := range rows {
 		fmt.Fprintln(w, line(row, func(i int, s string) string { return cols[i].style(s) }))
-		if verbose && findings[i].URL != "" {
-			fmt.Fprintf(w, "  %s %s\n", c.Dim("↳"), c.Dim(clean(findings[i].URL)))
+		if verbose {
+			u := findings[i].URL
+			if findings[i].ResolvedURL != "" {
+				u = findings[i].ResolvedURL
+			}
+			if u != "" {
+				fmt.Fprintf(w, "  %s %s\n", c.Dim("↳"), c.Dim(clean(u)))
+			}
 		}
 	}
 }
 
-func writeGuidance(w io.Writer, c Palette, findings []scan.Finding) {
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Anyone can publish these names on the public registry. If a build resolves")
-	fmt.Fprintln(w, "them there instead of your private source, it installs the publisher's code.")
+func writeGuidance(w io.Writer, c Palette, unclaimed, shadow []scan.Finding) {
+	if len(unclaimed) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Anyone can publish these names on the public registry. If a build resolves")
+		fmt.Fprintln(w, "them there instead of your private source, it installs the publisher's code.")
+	}
+	if len(shadow) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "These installs bypass your internal registry proxy and its security controls.")
+		fmt.Fprintln(w, "Lockfiles that embed public registry URLs pull directly from the internet.")
+	}
 
 	type advice struct{ eco, text string }
 	var tips []advice
 	seen := map[string]bool{}
 	width := 0
-	for _, f := range findings {
-		if f.Remediation == "" || seen[f.Ecosystem] {
-			continue
+	add := func(eco, text string) {
+		key := eco + "\x00" + text
+		if text == "" || seen[key] {
+			return
 		}
-		seen[f.Ecosystem] = true
-		tips = append(tips, advice{clean(f.Ecosystem), f.Remediation})
-		if n := utf8.RuneCountInString(f.Ecosystem); n > width {
+		seen[key] = true
+		tips = append(tips, advice{clean(eco), text})
+		if n := utf8.RuneCountInString(eco); n > width {
 			width = n
 		}
+	}
+	for _, f := range unclaimed {
+		add(f.Ecosystem, f.Remediation)
+	}
+	if len(shadow) > 0 {
+		add("sources", scan.RemediationShadow)
 	}
 	if len(tips) == 0 {
 		return
@@ -202,10 +242,25 @@ func summaryLine(s scan.Stats) string {
 	}
 	parts := []string{
 		"Scanned " + plural(s.Manifests, "manifest", "manifests"),
+	}
+	if s.Lockfiles > 0 || s.ResolvedPackages > 0 {
+		parts[0] += " · " + plural(s.Lockfiles, "lockfile", "lockfiles")
+	}
+	parts = append(parts,
 		packages,
 		plural(s.Findings, "finding", "findings"),
 		fmt.Sprintf("%d skipped", s.Skipped),
 		plural(s.Errors, "error", "errors"),
+	)
+	if s.ResolvedPackages > 0 {
+		parts = []string{
+			parts[0],
+			packages,
+			plural(s.ResolvedPackages, "resolved dep", "resolved deps"),
+			plural(s.Findings, "finding", "findings"),
+			fmt.Sprintf("%d skipped", s.Skipped),
+			plural(s.Errors, "error", "errors"),
+		}
 	}
 	line := strings.Join(parts, " · ")
 	if s.DurationMS > 0 {
@@ -241,13 +296,26 @@ func severityStyle(c Palette) func(string) string {
 	}
 }
 
-func colorFooter(c Palette, findingCount int) string {
-	plain := FooterText(findingCount)
+func splitFindings(findings []scan.Finding) (unclaimed, shadow []scan.Finding) {
+	for _, f := range findings {
+		switch f.Reason {
+		case scan.ReasonShadowRegistry:
+			shadow = append(shadow, f)
+		default:
+			unclaimed = append(unclaimed, f)
+		}
+	}
+	return unclaimed, shadow
+}
+
+func colorFooter(c Palette, unclaimed, shadow int) string {
+	plain := FooterText(unclaimed, shadow)
 	if !c.Enabled() {
 		return plain
 	}
 	lines := strings.Split(plain, "\n")
 	out := make([]string, 0, len(lines))
+	findingCount := unclaimed + shadow
 	for i, line := range lines {
 		switch {
 		case i == 0 && strings.HasPrefix(line, "───"):

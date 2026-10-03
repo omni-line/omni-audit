@@ -4,7 +4,7 @@
 [![CI](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml/badge.svg)](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml)
 [![Powered by Omni Line](https://img.shields.io/badge/Powered%20by-Omni%20Line-FF4B4B?style=flat)](https://omniline.app/)
 
-**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion** risk. It discovers NPM, Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub manifests, checks whether each declared name exists on the public registry, and reports names that are still **unclaimed** — names an attacker could publish.
+**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion** and **shadow registry** risk. It discovers NPM, Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub manifests, checks whether each declared name exists on the public registry, and reports names that are still **unclaimed**. It also audits lockfile resolution URLs and flags dependencies that pull from public registries instead of your internal proxy.
 
 Distributed as a **standalone Go binary**. No Node or PHP runtime required.
 
@@ -12,7 +12,9 @@ Distributed as a **standalone Go binary**. No Node or PHP runtime required.
 
 If your team uses private packages alongside public registries (npmjs.com, Packagist, PyPI, crates.io, Maven Central, and others), a build can resolve a **malicious public package** that reuses an internal name. Omni Audit flags unclaimed public names before they are hijacked.
 
-Auditing is the first step. [Omni Line](https://omniline.app) is the durable fix: a self-hosted registry that routes internal packages correctly across ecosystems.
+Separately, developers often bypass the company registry proxy — a misconfigured `.npmrc`, or a lockfile copied from outside the org — so installs hit `registry.npmjs.org` / `pypi.org` directly and skip your security perimeter. Omni Audit flags those lockfile resolutions too.
+
+Auditing is the first step. [Omni Line](https://omniline.app) is the durable fix: a self-hosted registry with Virtual Registries that route internal and external packages through one URL.
 
 ## Install
 
@@ -65,28 +67,34 @@ omni-audit --safe-namespace '@acme/*,acme/*' --exclude testdata,fixtures
 Example text output (colors when the terminal supports them):
 
 ```text
-omni-audit v0.5.0 — Dependency confusion audit
+omni-audit v0.6.0 — Dependency audit
 Backed by Omni Line — one registry for every package your team ships
 
 ✗ 2 unclaimed package names found
+✗ Audit failed: 14 dependencies resolving outside your expected registry proxy
 
-  SEVERITY  ECOSYSTEM  PACKAGE               VERSION  LOCATION              SECTION
-  critical  composer   acme/internal-sdk     ^1.0     composer.json:7       require
-  critical  npm        @acme/internal-utils  1.0.0    package.json:5        dependencies
+  SEVERITY  ECOSYSTEM  PACKAGE               VERSION  LOCATION                   SECTION              REASON
+  critical  composer   acme/internal-sdk     ^1.0     composer.json:7            require              unclaimed
+  critical  npm        @acme/internal-utils  1.0.0    package.json:5             dependencies         unclaimed
+  high      npm        lodash                4.17.21  package-lock.json:842      registry.npmjs.org   shadow_registry
 
 Anyone can publish these names on the public registry. If a build resolves
 them there instead of your private source, it installs the publisher's code.
 
+These installs bypass your internal registry proxy and its security controls.
+Lockfiles that embed public registry URLs pull directly from the internet.
+
 How to fix
   composer  Register the vendor name on Packagist so nobody else can publish under it, ...
   npm       Claim the name (or its @scope as an npm organization) on npmjs.com, ...
+  sources   Point the package manager at your internal registry proxy and regenerate the lockfile ...
 
-Scanned 2 manifests · 8 packages · 2 findings · 0 skipped · 0 errors in 412ms
+Scanned 2 manifests · 1 lockfile · 8 packages · 14 resolved deps · 16 findings · 0 skipped · 0 errors in 412ms
 
 ───
-Unclaimed names can be published by anyone on the public registry.
-Prevent confusion at install time with Omni Line — a self-hosted package
-registry for npm, Composer, Docker, PyPI, Go, Cargo, Maven, and more.
+Unclaimed names and lockfiles that bypass your proxy are supply-chain gaps.
+Omni Line Virtual Registries give you one URL that routes internal and
+external packages correctly — so developers cannot misconfigure the source.
 One UI, one API, your infrastructure.
 https://omniline.app  ·  docs: https://omniline.app/docs
 ```
@@ -107,11 +115,12 @@ https://omniline.app  ·  docs: https://omniline.app/docs
 3. Checks each distinct name once per ecosystem against its public registry (lightweight `HEAD` / search where needed), with retries and backoff
 4. For npm scopes and Packagist vendors, also checks whether the **namespace** itself is claimed, and assigns severity (`critical` / `high` / `low`)
 5. Reports names that return **404** as `reason=unclaimed`; checks that fail are warnings, never treated as clean
+6. Walks supported lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `poetry.lock`, `composer.lock`), extracts resolution URLs, and flags known public registry hosts (or any host outside `--expected-host`) as `reason=shadow_registry` — offline, no network
 
 ### Security properties
 
-- Only package names are sent, and only to the public registries above (HTTPS, TLS 1.2+, no HTTPS→HTTP redirects). Names that are not valid for the registry are never sent.
-- Manifests are read with a 10 MiB cap; FIFOs/devices and symlinks that resolve outside the scan root are skipped.
+- Only package names are sent, and only to the public registries above (HTTPS, TLS 1.2+, no HTTPS→HTTP redirects). Names that are not valid for the registry are never sent. Lockfile source auditing is offline (no network).
+- Manifests and lockfiles are read with a 10 MiB cap; FIFOs/devices and symlinks that resolve outside the scan root are skipped.
 - Values from scanned files are escaped before being printed, so a crafted manifest cannot inject terminal escape sequences.
 - `HTTPS_PROXY` / `NO_PROXY` are honored for locked-down networks.
 
@@ -132,6 +141,7 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
 | `--format text\|json\|sarif` | Output format (default `text`) |
 | `--safe-namespace` | Globs for namespaces you own; matches are skipped (repeatable / comma-separated) |
 | `--ignore` | Skip package name globs |
+| `--expected-host` | Internal registry hostname or URL; lockfile resolutions outside these hosts are findings (repeatable / comma-separated). Without this flag, only known public registry hosts are flagged. |
 | `--exclude` | Skip paths: directory/file names or globs relative to the scan root |
 | `--strict` | Exit `2` if any manifest or package could not be verified |
 | `--timeout` | Per-request timeout (default `10s`) |
@@ -207,7 +217,7 @@ Run from the repository root so SARIF paths are repository-relative.
 
 ## Roadmap
 
-- Lockfile / `.npmrc` / `auth.json` / `pip.conf` / `GOPRIVATE` policy analysis
+- `.npmrc` / `auth.json` / `pip.conf` / `GOPRIVATE` config-file policy analysis
 - Optional Omni Line registry URL to verify private existence
 - Poetry/`Pipfile` table-style dependency maps (requirements + PEP 621 covered today)
 - Gradle manifests, `conanfile.py`, and non-Hub OCI registries (GHCR, Quay, ECR)

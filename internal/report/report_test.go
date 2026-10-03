@@ -59,7 +59,7 @@ func TestTextIncludesMarketing(t *testing.T) {
 		"omniline.app/docs",
 		"Kept clean",
 		"safe place for your supply chain",
-		"✓ No unclaimed package names found.",
+		"✓ No unclaimed names or unexpected package sources found.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
@@ -87,10 +87,11 @@ func TestTextFindingDetails(t *testing.T) {
 	}
 	for _, want := range []string{
 		"✗ 1 unclaimed package name found",
-		"SEVERITY", "ECOSYSTEM", "PACKAGE", "LOCATION",
+		"SEVERITY", "ECOSYSTEM", "PACKAGE", "LOCATION", "REASON",
 		"@acme/secret-pkg",
 		"apps/web/package.json:12",
 		"devDependencies",
+		"unclaimed",
 		"How to fix",
 		"Claim the scope.",
 		"Scanned 1 manifest · 3 packages · 1 finding · 0 skipped · 0 errors in 1.2s",
@@ -185,8 +186,47 @@ func TestWarningsTruncatedWithoutVerbose(t *testing.T) {
 
 func TestNoManifestsMessage(t *testing.T) {
 	text, _ := write(t, &scan.Result{}, report.Options{Format: report.FormatText, NoMarketing: true})
-	if !strings.Contains(text, "No supported dependency manifests found") {
+	if !strings.Contains(text, "No supported dependency manifests or lockfiles found") {
 		t.Fatalf("got:\n%s", text)
+	}
+}
+
+func TestShadowRegistryFinding(t *testing.T) {
+	res := &scan.Result{
+		Findings: []scan.Finding{{
+			Ecosystem:   "npm",
+			Package:     "lodash",
+			Version:     "4.17.21",
+			Manifest:    "package-lock.json",
+			Line:        42,
+			Group:       "resolved",
+			Reason:      scan.ReasonShadowRegistry,
+			Severity:    scan.SeverityHigh,
+			Registry:    "registry.npmjs.org",
+			URL:         "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
+			ResolvedURL: "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
+			Remediation: scan.RemediationShadow,
+		}},
+		Stats: scan.Stats{Manifests: 1, Lockfiles: 1, Packages: 1, ResolvedPackages: 1, Findings: 1},
+	}
+	text, _ := write(t, res, report.Options{Format: report.FormatText, NoMarketing: true})
+	for _, want := range []string{
+		"Audit failed",
+		"shadow_registry",
+		"registry.npmjs.org",
+		"bypass your internal registry proxy",
+		"sources",
+		"SEVERITY",
+		"REASON",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+
+	out, _ := write(t, res, report.Options{Format: report.FormatSARIF})
+	if !strings.Contains(out, `"ruleId": "OA002"`) {
+		t.Fatalf("SARIF should use OA002:\n%s", out)
 	}
 }
 

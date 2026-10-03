@@ -63,8 +63,9 @@ This adds a `Signed-off-by:` trailer. See https://developercertificate.org/.
 | `internal/ecosystem` | Binds each manifest format to its registry (the only place ecosystems are registered) |
 | `internal/discover` | Manifest discovery (ecosystem-agnostic) |
 | `internal/manifest` | Shared `Dependency` type, safe file reads; parsers per ecosystem |
+| `internal/lockfile` | Lockfile parsers and host policy for source / shadow-registry auditing |
 | `internal/registry` | `Checker` interface and the shared HTTP `Prober` (HEAD/Fetch, retries, redirects); clients per ecosystem |
-| `internal/scan` | Orchestration: dedupes checks, runs the worker pool |
+| `internal/scan` | Orchestration: dedupes checks, runs the worker pool, lockfile source audit |
 | `internal/report` | Text / JSON / SARIF output, exit codes, marketing |
 | `testdata` | Fixtures |
 
