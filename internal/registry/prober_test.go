@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -156,6 +157,121 @@ func TestProbeHonorsContextCancellation(t *testing.T) {
 	}
 }
 
+func TestFetchStatusMapping(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method=%s want GET", r.Method)
+		}
+		switch r.URL.Path {
+		case "/ok":
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/gone":
+			w.WriteHeader(http.StatusGone)
+		case "/teapot":
+			w.WriteHeader(http.StatusTeapot)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	p := testProber()
+
+	body, st, err := p.Fetch(context.Background(), srv.URL+"/ok")
+	if err != nil || st != Exists || string(body) != `{"ok":true}` {
+		t.Fatalf("ok: body=%q status=%v err=%v", body, st, err)
+	}
+	body, st, err = p.Fetch(context.Background(), srv.URL+"/missing")
+	if err != nil || st != NotFound || body != nil {
+		t.Fatalf("missing: body=%q status=%v err=%v", body, st, err)
+	}
+	body, st, err = p.Fetch(context.Background(), srv.URL+"/gone")
+	if err != nil || st != NotFound || body != nil {
+		t.Fatalf("gone: body=%q status=%v err=%v", body, st, err)
+	}
+	_, st, err = p.Fetch(context.Background(), srv.URL+"/teapot")
+	if st != Unknown || err == nil {
+		t.Fatalf("teapot: status=%v err=%v", st, err)
+	}
+}
+
+func TestFetchRetriesTransientFailures(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch atomic.AddInt32(&calls, 1) {
+		case 1:
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+		case 2:
+			w.WriteHeader(http.StatusBadGateway)
+		default:
+			_, _ = w.Write([]byte(`{"n":1}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	body, st, err := testProber().Fetch(context.Background(), srv.URL+"/x")
+	if err != nil || st != Exists || string(body) != `{"n":1}` {
+		t.Fatalf("status=%v err=%v body=%q", st, err, body)
+	}
+	if calls != 3 {
+		t.Fatalf("calls=%d want 3", calls)
+	}
+}
+
+func TestFetchGivesUpAfterRetries(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, st, err := testProber().Fetch(context.Background(), srv.URL+"/x")
+	if st != Unknown || err == nil {
+		t.Fatalf("status=%v err=%v", st, err)
+	}
+	if !strings.Contains(err.Error(), "3 attempts") {
+		t.Fatalf("error should mention attempts: %v", err)
+	}
+	if calls != 3 {
+		t.Fatalf("calls=%d want 3", calls)
+	}
+}
+
+func TestFetchTruncatesLargeBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// One byte over the Fetch cap.
+		_, _ = w.Write(bytes.Repeat([]byte("a"), maxFetchBytes+1))
+	}))
+	t.Cleanup(srv.Close)
+
+	body, st, err := testProber().Fetch(context.Background(), srv.URL+"/big")
+	if err != nil || st != Exists {
+		t.Fatalf("status=%v err=%v", st, err)
+	}
+	if len(body) != maxFetchBytes {
+		t.Fatalf("len=%d want %d", len(body), maxFetchBytes)
+	}
+}
+
+func TestFetchHonorsContextCancellation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	p := testProber()
+	p.BaseDelay = time.Hour
+	p.MaxDelay = time.Hour
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, _, err := p.Fetch(ctx, srv.URL+"/x")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err=%v want deadline exceeded", err)
+	}
+}
+
 func TestRedirectDowngradeRefused(t *testing.T) {
 	via := []*http.Request{{URL: mustURL(t, "https://registry.example/x")}}
 	next := &http.Request{URL: mustURL(t, "http://evil.example/x")}
@@ -165,6 +281,28 @@ func TestRedirectDowngradeRefused(t *testing.T) {
 	next.URL = mustURL(t, "https://registry.example/y")
 	if err := checkRedirect(next, via); err != nil {
 		t.Fatalf("https->https redirect refused: %v", err)
+	}
+}
+
+func TestRedirectPrivateHostsRefused(t *testing.T) {
+	via := []*http.Request{{URL: mustURL(t, "https://registry.npmjs.org/x")}}
+	cases := []string{
+		"https://127.0.0.1/latest",
+		"https://10.0.0.5/x",
+		"https://192.168.1.1/x",
+		"https://169.254.169.254/latest/meta-data/",
+		"https://[::1]/x",
+		"https://metadata.google.internal/computeMetadata/v1/",
+	}
+	for _, raw := range cases {
+		next := &http.Request{URL: mustURL(t, raw)}
+		if err := checkRedirect(next, via); err == nil {
+			t.Errorf("expected redirect to %s to be refused", raw)
+		}
+	}
+	next := &http.Request{URL: mustURL(t, "https://cdn.example.com/pkg.tgz")}
+	if err := checkRedirect(next, via); err != nil {
+		t.Fatalf("public CDN redirect refused: %v", err)
 	}
 }
 

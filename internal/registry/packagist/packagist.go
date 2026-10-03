@@ -59,6 +59,16 @@ func Vendor(name string) (string, bool) {
 	return vendor, true
 }
 
+// PackageNamespace implements registry.Namespaced.
+func (c *Client) PackageNamespace(name string) (string, bool) {
+	return Vendor(name)
+}
+
+// NamespaceExists implements registry.Namespaced.
+func (c *Client) NamespaceExists(ctx context.Context, ns string) (registry.Status, error) {
+	return c.VendorExists(ctx, ns)
+}
+
 // Exists implements registry.Checker.
 //
 // Tagged releases live at /p2/<name>.json and dev branches at

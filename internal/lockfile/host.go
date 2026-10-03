@@ -40,6 +40,57 @@ var skipURLPrefixes = []string{
 	"ssh:", "hg+", "bzr+", "svn+",
 }
 
+// secretQueryKeys are query parameter names commonly used for registry tokens.
+var secretQueryKeys = map[string]struct{}{
+	"token":         {},
+	"access_token":  {},
+	"auth":          {},
+	"auth_token":    {},
+	"api_key":       {},
+	"apikey":        {},
+	"key":           {},
+	"password":      {},
+	"secret":        {},
+	"client_secret": {},
+}
+
+// RedactURL strips credentials from a URL for safe emission in findings and
+// reports. Userinfo passwords become "xxxxx" (same as url.URL.Redacted);
+// bare usernames are also replaced (tokens are often passed as the username).
+// Known secret query parameters are replaced with "xxxxx". Unparseable input
+// is returned unchanged.
+func RedactURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	if u.User != nil {
+		if name := u.User.Username(); name != "" {
+			if _, hasPass := u.User.Password(); hasPass {
+				u.User = url.UserPassword(name, "xxxxx")
+			} else {
+				u.User = url.User("xxxxx")
+			}
+		}
+	}
+	q := u.Query()
+	changed := false
+	for k := range q {
+		if _, secret := secretQueryKeys[strings.ToLower(k)]; secret {
+			q.Set(k, "xxxxx")
+			changed = true
+		}
+	}
+	if changed {
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
+}
+
 // Host extracts the lowercase hostname from a resolution URL.
 // Returns ("", false) when the value is not an auditable registry URL.
 func Host(raw string) (string, bool) {

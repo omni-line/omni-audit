@@ -33,20 +33,41 @@ var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 // ReadFile reads a manifest from disk. It refuses non-regular files (FIFOs,
 // devices) that could block or stream forever, enforces MaxFileSize, and
 // strips a leading UTF-8 BOM.
+//
+// Lstat runs before Open so named pipes and devices are rejected without
+// blocking on open.
 func ReadFile(path string) ([]byte, error) {
-	f, err := os.Open(path)
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		// Follow the symlink for the regular-file check, but only after we
+		// know the path itself is a symlink (not a FIFO/device).
+		fi, err = os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, errors.New("not a regular file")
+	}
+
+	f, err := openRegular(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	fi, err := f.Stat()
+	// Re-check the opened fd against TOCTOU (path replaced between Lstat and open).
+	fi, err = f.Stat()
 	if err != nil {
 		return nil, err
 	}
 	if !fi.Mode().IsRegular() {
 		return nil, errors.New("not a regular file")
 	}
+
 	data, err := io.ReadAll(io.LimitReader(f, MaxFileSize+1))
 	if err != nil {
 		return nil, err

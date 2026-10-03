@@ -1,7 +1,6 @@
 package ecosystem
 
 import (
-	"context"
 	"path"
 	"strings"
 
@@ -29,11 +28,9 @@ func Composer(c registry.Checker) Ecosystem {
 			"and declare your private repository in composer.json \"repositories\".",
 		Checker: c,
 	}
-	if client, ok := c.(*packagist.Client); ok {
-		eco.Namespace = packagist.Vendor
-		eco.NamespaceChecker = registry.CheckerFunc(func(ctx context.Context, ns string) (registry.Status, error) {
-			return client.VendorExists(ctx, ns)
-		})
+	if ns, ok := c.(registry.Namespaced); ok {
+		eco.Namespace = ns.PackageNamespace
+		eco.NamespaceChecker = registry.CheckerFunc(ns.NamespaceExists)
 	}
 	return eco
 }

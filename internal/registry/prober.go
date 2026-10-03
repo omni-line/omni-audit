@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -57,7 +59,37 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	if via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
 		return fmt.Errorf("refusing redirect from https to %s", req.URL.Scheme)
 	}
+	host := req.URL.Hostname()
+	if blockedRedirectHost(host) {
+		return fmt.Errorf("refusing redirect to non-public host %q", host)
+	}
 	return nil
+}
+
+// blockedRedirectHosts are well-known cloud metadata / internal names that
+// should never be followed even when the URL is not a literal IP.
+var blockedRedirectHosts = map[string]struct{}{
+	"metadata.google.internal":       {},
+	"metadata.goog":                  {},
+	"kubernetes.default":             {},
+	"kubernetes.default.svc":         {},
+	"kubernetes.default.svc.cluster": {},
+}
+
+func blockedRedirectHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return true
+	}
+	if _, bad := blockedRedirectHosts[host]; bad {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
 // Prober answers "does this URL exist?" with HEAD requests, falling back to

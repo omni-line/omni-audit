@@ -63,10 +63,13 @@ func ParseNPM(data []byte) ([]Resolved, error) {
 		if err := json.Unmarshal(deps, &tree); err != nil {
 			return nil, fmt.Errorf("package-lock.json dependencies: %w", err)
 		}
-		walkNPMV1(data, tree, seen, &out)
+		walkNPMV1(data, tree, seen, &out, 0)
 	}
 	return out, nil
 }
+
+// maxNPMV1Depth bounds nested dependencies trees in lockfileVersion 1.
+const maxNPMV1Depth = 64
 
 type npmPkg struct {
 	Name     string `json:"name"`
@@ -80,7 +83,10 @@ type npmV1Dep struct {
 	Dependencies map[string]npmV1Dep `json:"dependencies"`
 }
 
-func walkNPMV1(data []byte, tree map[string]npmV1Dep, seen map[string]struct{}, out *[]Resolved) {
+func walkNPMV1(data []byte, tree map[string]npmV1Dep, seen map[string]struct{}, out *[]Resolved, depth int) {
+	if depth > maxNPMV1Depth || len(tree) == 0 {
+		return
+	}
 	names := make([]string, 0, len(tree))
 	for n := range tree {
 		names = append(names, n)
@@ -101,7 +107,7 @@ func walkNPMV1(data []byte, tree map[string]npmV1Dep, seen map[string]struct{}, 
 			}
 		}
 		if len(d.Dependencies) > 0 {
-			walkNPMV1(data, d.Dependencies, seen, out)
+			walkNPMV1(data, d.Dependencies, seen, out, depth+1)
 		}
 	}
 }

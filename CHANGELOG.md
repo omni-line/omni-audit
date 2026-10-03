@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-10-03
+
+### Security
+
+- Reject FIFOs/devices in `manifest.ReadFile` via `Lstat` before open (and `O_NONBLOCK` on Unix) so hostile trees cannot hang CI
+- Redact lockfile URL userinfo and common token query parameters in finding `url` / `resolved_url` (text, JSON, SARIF)
+- Refuse HTTPS redirects to private, loopback, link-local, or cloud-metadata hosts
+
+### Fixed
+
+- Cap nested npm lockfile v1 `dependencies` walks at depth 64
+
+### Changed
+
+- Namespace ownership wiring uses `registry.Namespaced` instead of concrete client type asserts
+- Shared worker-pool helper for package and namespace checks
+- CI and `make cover` enforce a minimum 80% statement coverage
+- CONTRIBUTING documents the full ecosystem checklist (corpus, lockfile, `PublicHosts`)
+
 ## [0.7.0] — 2026-10-03
 
 ### Added

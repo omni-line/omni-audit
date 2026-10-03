@@ -1,7 +1,6 @@
 package ecosystem
 
 import (
-	"context"
 	"path"
 	"strings"
 
@@ -30,11 +29,9 @@ func NPM(c registry.Checker) Ecosystem {
 			"and map internal scopes to your private registry in .npmrc.",
 		Checker: c,
 	}
-	if client, ok := c.(*regnpm.Client); ok {
-		eco.Namespace = regnpm.Scope
-		eco.NamespaceChecker = registry.CheckerFunc(func(ctx context.Context, ns string) (registry.Status, error) {
-			return client.ScopeExists(ctx, ns)
-		})
+	if ns, ok := c.(registry.Namespaced); ok {
+		eco.Namespace = ns.PackageNamespace
+		eco.NamespaceChecker = registry.CheckerFunc(ns.NamespaceExists)
 	}
 	return eco
 }

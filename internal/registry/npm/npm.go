@@ -55,6 +55,16 @@ func Scope(name string) (string, bool) {
 	return scope, true
 }
 
+// PackageNamespace implements registry.Namespaced.
+func (c *Client) PackageNamespace(name string) (string, bool) {
+	return Scope(name)
+}
+
+// NamespaceExists implements registry.Namespaced.
+func (c *Client) NamespaceExists(ctx context.Context, ns string) (registry.Status, error) {
+	return c.ScopeExists(ctx, ns)
+}
+
 // Exists implements registry.Checker.
 func (c *Client) Exists(ctx context.Context, name string) (registry.Status, error) {
 	if !ValidName(name) {

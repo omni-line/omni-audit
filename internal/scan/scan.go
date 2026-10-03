@@ -302,7 +302,7 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 			Reason:      ReasonUnclaimed,
 			Severity:    SeverityHigh,
 			Registry:    o.eco.Registry,
-			URL:         o.eco.URL(o.dep.Name),
+			URL:         lockfile.RedactURL(o.eco.URL(o.dep.Name)),
 			Remediation: o.eco.Remediation,
 		}
 		if o.eco.Namespace != nil && o.eco.NamespaceChecker != nil {
@@ -422,6 +422,7 @@ func auditLockfiles(root string, opts Options, res *Result) {
 			if !bad {
 				continue
 			}
+			safeURL := lockfile.RedactURL(d.URL)
 			res.Findings = append(res.Findings, Finding{
 				Ecosystem:   m.Ecosystem,
 				Package:     d.Name,
@@ -432,8 +433,8 @@ func auditLockfiles(root string, opts Options, res *Result) {
 				Reason:      ReasonShadowRegistry,
 				Severity:    SeverityHigh,
 				Registry:    host,
-				URL:         d.URL,
-				ResolvedURL: d.URL,
+				URL:         safeURL,
+				ResolvedURL: safeURL,
 				Remediation: RemediationShadow,
 			})
 		}
@@ -454,83 +455,60 @@ func allowlisted(opts Options, name, normalized string) bool {
 // runChecks resolves every check with a bounded worker pool. Each worker
 // writes only to the check it received, and results are read after Wait.
 func runChecks(ctx context.Context, checks []*check, workers int) {
-	if len(checks) == 0 {
-		return
-	}
-	if workers <= 0 {
-		workers = DefaultConcurrency
-	}
-	if workers > len(checks) {
-		workers = len(checks)
-	}
-
-	jobs := make(chan *check)
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for c := range jobs {
-				if ctx.Err() != nil {
-					continue // leave as Unknown / errNotChecked
-				}
-				st, err := c.eco.Checker.Exists(ctx, c.name)
-				if err != nil {
-					st = registry.Unknown
-				}
-				c.status, c.err = st, err
-			}
-		}()
-	}
-
-feed:
-	for _, c := range checks {
-		select {
-		case <-ctx.Done():
-			break feed
-		case jobs <- c:
+	runPool(ctx, checks, workers, func(ctx context.Context, c *check) {
+		st, err := c.eco.Checker.Exists(ctx, c.name)
+		if err != nil {
+			st = registry.Unknown
 		}
-	}
-	close(jobs)
-	wg.Wait()
+		c.status, c.err = st, err
+	})
 }
 
 func runNamespaceChecks(ctx context.Context, checks []*nsCheck, workers int) {
-	if len(checks) == 0 {
+	runPool(ctx, checks, workers, func(ctx context.Context, c *nsCheck) {
+		st, err := c.eco.NamespaceChecker.Exists(ctx, c.ns)
+		if err != nil {
+			st = registry.Unknown
+		}
+		c.status, c.err = st, err
+	})
+}
+
+// runPool runs work over items with a bounded worker pool. Items not started
+// before ctx cancellation are left untouched; in-flight work still runs until
+// the checker returns or its own context ends.
+func runPool[T any](ctx context.Context, items []T, workers int, work func(context.Context, T)) {
+	if len(items) == 0 {
 		return
 	}
 	if workers <= 0 {
 		workers = DefaultConcurrency
 	}
-	if workers > len(checks) {
-		workers = len(checks)
+	if workers > len(items) {
+		workers = len(items)
 	}
 
-	jobs := make(chan *nsCheck)
+	jobs := make(chan T)
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for c := range jobs {
+			for item := range jobs {
 				if ctx.Err() != nil {
 					continue
 				}
-				st, err := c.eco.NamespaceChecker.Exists(ctx, c.ns)
-				if err != nil {
-					st = registry.Unknown
-				}
-				c.status, c.err = st, err
+				work(ctx, item)
 			}
 		}()
 	}
 
 feed:
-	for _, c := range checks {
+	for _, item := range items {
 		select {
 		case <-ctx.Done():
 			break feed
-		case jobs <- c:
+		case jobs <- item:
 		}
 	}
 	close(jobs)

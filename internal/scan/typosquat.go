@@ -8,6 +8,7 @@ import (
 	"github.com/omni-line/omni-audit/internal/corpus"
 	"github.com/omni-line/omni-audit/internal/distance"
 	"github.com/omni-line/omni-audit/internal/ecosystem"
+	"github.com/omni-line/omni-audit/internal/lockfile"
 	"github.com/omni-line/omni-audit/internal/manifest"
 )
 
@@ -329,15 +330,15 @@ func (s *typoScanner) add(d typoDecl, kind string, dist int, tech distance.Techn
 		TargetRank:  targetRank,
 		Technique:   string(tech),
 		Registry:    d.eco.Registry,
-		URL:         d.eco.URL(d.dep.Name),
+		URL:         lockfile.RedactURL(d.eco.URL(d.dep.Name)),
 		Remediation: RemediationTyposquat,
 	}
 	if len(targets) > 0 {
 		// Prefer the corpus display form for URLs when it differs from the key.
 		suggest := targets[0]
-		f.SuggestionURL = d.eco.URL(suggest)
+		f.SuggestionURL = lockfile.RedactURL(d.eco.URL(suggest))
 		if f.SuggestionURL == "" {
-			f.SuggestionURL = d.eco.URL(d.eco.TypoKey(suggest))
+			f.SuggestionURL = lockfile.RedactURL(d.eco.URL(d.eco.TypoKey(suggest)))
 		}
 		f.Message = typosquatMessage(f)
 	}

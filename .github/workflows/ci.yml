@@ -50,7 +50,14 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Coverage gate
+        if: runner.os == 'Linux'
+        run: |
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $NF}' | tr -d '%')
+          echo "total: ${total}% (minimum 80%)"
+          awk -v t="$total" 'BEGIN { if ((t+0) < 80) { printf "coverage %.1f%% is below 80%%\n", t; exit 1 } }'
 
       - name: Build
         run: go build ./cmd/omni-audit

@@ -45,6 +45,19 @@ type Checker interface {
 	Exists(ctx context.Context, name string) (Status, error)
 }
 
+// Namespaced is implemented by registry clients that can report whether a
+// package namespace (npm scope, Packagist vendor, …) is claimed. Ecosystem
+// wiring type-asserts Checker to Namespaced so mocks and wrappers that
+// implement the methods keep critical-severity namespace ownership checks.
+type Namespaced interface {
+	Checker
+	// PackageNamespace returns the namespace for name, or ok=false when the
+	// name has no namespace (unscoped packages).
+	PackageNamespace(name string) (ns string, ok bool)
+	// NamespaceExists reports whether ns is claimed on the public registry.
+	NamespaceExists(ctx context.Context, ns string) (Status, error)
+}
+
 // CheckerFunc adapts a function to the Checker interface.
 type CheckerFunc func(ctx context.Context, name string) (Status, error)
 

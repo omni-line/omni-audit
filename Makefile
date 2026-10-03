@@ -13,9 +13,14 @@ test:
 race:
 	go test -race -count=1 ./...
 
+# Minimum statement coverage enforced locally and in CI.
+COVER_MIN ?= 80
+
 cover:
 	go test -coverprofile=coverage.out ./...
-	go tool cover -func=coverage.out | tail -1
+	@total=$$(go tool cover -func=coverage.out | tail -1 | awk '{print $$NF}' | tr -d '%'); \
+	echo "total: $${total}% (minimum $(COVER_MIN)%)"; \
+	awk -v t="$$total" -v m="$(COVER_MIN)" 'BEGIN { if ((t+0) < (m+0)) { printf "coverage %.1f%% is below %s%%\n", t, m; exit 1 } }'
 
 vet:
 	go vet ./...

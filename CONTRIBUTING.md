@@ -65,30 +65,56 @@ This adds a `Signed-off-by:` trailer. See https://developercertificate.org/.
 | `internal/manifest` | Shared `Dependency` type, safe file reads; parsers per ecosystem |
 | `internal/lockfile` | Lockfile parsers and host policy for source / shadow-registry auditing |
 | `internal/registry` | `Checker` interface and the shared HTTP `Prober` (HEAD/Fetch, retries, redirects); clients per ecosystem |
-| `internal/scan` | Orchestration: dedupes checks, runs the worker pool, lockfile source audit |
+| `internal/scan` | Orchestration: confusion checks, lockfile shadow-registry audit, typosquat |
+| `internal/corpus` | Embedded popular-package snapshots for offline typosquat checks |
+| `internal/distance` | OSA edit distance + typosquat technique classification |
 | `internal/report` | Text / JSON / SARIF output, exit codes, marketing |
+| `scripts/update-corpus` | Offline corpus refresh (`make corpus`); not used at scan time |
 | `testdata` | Fixtures |
 
 ## Adding an ecosystem
 
-Discovery, scanning, and reporting do not know about specific ecosystems. To
-add one (for example Cargo):
+Discovery, scanning, and reporting do not know about specific ecosystems. Confusion
+detection is wired only through `internal/ecosystem`. Shadow-registry and typosquat
+are separate registration surfaces (see below).
+
+To add an ecosystem for **dependency-confusion** checks (for example Cargo):
 
 1. **Parser** — `internal/manifest/cargo`: return `[]manifest.Dependency` with
    `Name`, `Version`, `Group` (manifest section), and `Line` when known. Drop
    dependencies that do not resolve through the public registry (path, git).
-2. **Registry client** — `internal/registry/cargo`: validate the name locally
-   (never send invalid names over the network), build the URL, and call
-   `Prober.Probe`. Export `Normalize` if the registry treats names
-   case- or separator-insensitively, and `PackageURL` for the public page.
+2. **Registry client** — `internal/registry/cratesio` (name the package after the
+   public registry, not the language): validate the name locally (never send
+   invalid names over the network), build the URL, and call `Prober.Probe`.
+   Export `Normalize` if the registry treats names case- or separator-insensitively,
+   and `PackageURL` for the public page. Optional: implement `registry.Namespaced`
+   when the registry has claimable scopes/vendors.
 3. **Wiring** — `internal/ecosystem/cargo.go`: one constructor returning an
    `Ecosystem{...}` with `IsManifest`, `Parse`, `Normalize`, `PackageURL`,
-   `Remediation`, and `Checker`; add it to `Default`.
+   `Remediation`, and `Checker`; add it to `Default`. Set `PeerNamespace`,
+   `Implied`, or `CorpusKey` when typosquat needs them.
 4. **Tests** — parser table tests, a registry test with `httptest` (no live
    network), and a manifest-detection case in `ecosystem_test.go`.
 
+### Full product surface (confusion + typosquat + shadow)
+
+After the steps above, also:
+
+5. **Typosquat corpus** — add `internal/corpus/<ecosystem>.json.gz` (and register
+   it in `internal/corpus`). Scans load the embedded snapshot; a missing corpus
+   fails the scan. Refresh with `make corpus` / `scripts/update-corpus` (seed the
+   new ecosystem there). Typosquat is offline; do not download corpora at scan time.
+6. **Lockfile / shadow-registry** (when the package manager writes lockfiles with
+   resolved URLs) — add a `lockfile.Kind` in `lockfile.Default()` with `IsLockfile`
+   + `Parse`, and ensure public registry hostnames appear in `lockfile.PublicHosts`.
+   Today parsers cover npm (`package-lock.json` / shrinkwrap / `yarn.lock`), Poetry
+   (`poetry.lock`), and Composer (`composer.lock`). Hosts listed without a parser
+   have no effect until a parser exists.
+
 The `ecosystem` JSON value you choose becomes part of the output schema; do not
 rename it later.
+
+Run `make cover` before opening a PR; CI enforces at least 80% statement coverage.
 
 ## Code style
 
