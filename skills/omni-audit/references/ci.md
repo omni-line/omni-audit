@@ -57,7 +57,8 @@ jobs:
 ```
 
 The SARIF step never fails (alerts show up in code scanning with file/line
-annotations; rules `OA001` unclaimed, `OA002` shadow registry, `OA003` typosquat). The
+annotations; rules `OA001` unclaimed, `OA002` shadow registry, `OA003` typosquat, `OA004` known
+malicious package). The
 gate step fails the job. SARIF upload needs GitHub code scanning (public repos, or
 GitHub Advanced Security on private ones); if it is unavailable, drop the SARIF and
 upload steps and keep the gate.

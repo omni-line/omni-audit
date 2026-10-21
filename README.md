@@ -4,7 +4,7 @@
 [![CI](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml/badge.svg)](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml)
 [![Powered by Omni Line](https://img.shields.io/badge/Powered%20by-Omni%20Line-FF4B4B?style=flat)](https://omniline.app/)
 
-**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion**, **typosquatting**, and **shadow registry** risk. It discovers NPM, Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub manifests, checks whether each declared name exists on the public registry, and reports names that are still **unclaimed**. It compares names to an embedded popular-package corpus for 1–2-edit near-misses, and audits lockfile resolution URLs that pull from public registries instead of your internal proxy.
+**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion**, **typosquatting**, **known malicious packages**, and **shadow registry** risk. It discovers NPM, Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub manifests, checks whether each declared name exists on the public registry, and reports names that are still **unclaimed**. It compares names to an embedded popular-package corpus for 1–2-edit near-misses, checks names and locked versions against the OpenSSF malicious-packages database, and audits lockfile resolution URLs that pull from public registries instead of your internal proxy.
 
 Distributed as a **standalone Go binary**. No Node or PHP runtime required.
 
@@ -13,6 +13,8 @@ Distributed as a **standalone Go binary**. No Node or PHP runtime required.
 If your team uses private packages alongside public registries (npmjs.com, Packagist, PyPI, crates.io, Maven Central, and others), a build can resolve a **malicious public package** that reuses an internal name. Omni Audit flags unclaimed public names before they are hijacked.
 
 Attackers also publish packages whose names look like popular libraries (`react-domm`, `crossenv`). A single typo in a manifest can install malware. Omni Audit flags those near-misses offline against a high-download corpus.
+
+Some packages need no typo at all: they were published as malware outright, or a legitimate package (`nx`, `chalk`, `axios`) shipped malicious releases from a hijacked maintainer account. Omni Audit checks every declared name and locked version against the 239k OpenSSF malicious-packages (`MAL-`) advisories, offline, using the database from [mal-check](https://github.com/omni-line/mal-check).
 
 Separately, developers often bypass the company registry proxy — a misconfigured `.npmrc`, or a lockfile copied from outside the org — so installs hit `registry.npmjs.org` / `pypi.org` directly and skip your security perimeter. Omni Audit flags those lockfile resolutions too.
 
@@ -136,10 +138,11 @@ https://omniline.app  ·  docs: https://omniline.app/docs
 5. Reports names that return **404** as `reason=unclaimed`; checks that fail are warnings, never treated as clean
 6. Compares each declared name to an embedded popular-package corpus (and to namespace peers) and reports 1–2-edit near-misses as `reason=typosquat` — offline, no network
 7. Walks supported lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `poetry.lock`, `composer.lock`), extracts resolution URLs, and flags known public registry hosts (or any host outside `--expected-host`) as `reason=shadow_registry` — offline, no network
+8. Checks every lockfile resolution and every declared dependency against an embedded snapshot of [OpenSSF malicious-packages](https://github.com/ossf/malicious-packages) (`MAL-` advisories, via [mal-check](https://github.com/omni-line/mal-check)'s `pkg/maldb`) and reports matches as `reason=malicious`: `critical` when the locked version (or every version) is malware, `high` when only some versions are and the declaration is not pinned. Lockfile versions win over manifest ranges; clean versions of once-hijacked packages are not reported — offline, no network
 
 ### Security properties
 
-- Only package names are sent, and only to the public registries above (HTTPS, TLS 1.2+, no HTTPS→HTTP redirects). Names that are not valid for the registry are never sent. Lockfile source auditing and typosquat checks are offline (no network).
+- Only package names are sent, and only to the public registries above (HTTPS, TLS 1.2+, no HTTPS→HTTP redirects). Names that are not valid for the registry are never sent. Lockfile source auditing, typosquat, and malicious-package checks are offline (no network).
 - Manifests and lockfiles are read with a 10 MiB cap; FIFOs/devices and symlinks that resolve outside the scan root are skipped.
 - Values from scanned files are escaped before being printed, so a crafted manifest cannot inject terminal escape sequences.
 - `HTTPS_PROXY` / `NO_PROXY` are honored for locked-down networks.
@@ -165,6 +168,7 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
 | `--expected-host` | Internal registry hostname or URL; lockfile resolutions outside these hosts are findings (repeatable / comma-separated). Without this flag, only known public registry hosts are flagged. |
 | `--exclude` | Skip paths: directory/file names or globs relative to the scan root |
 | `--no-typosquat` | Disable offline typosquat checks |
+| `--no-malicious` | Disable the offline known-malicious-package check |
 | `--distance` | Maximum edit distance for typosquat matches (`1` or `2`, default `2`) |
 | `--scope` | Namespace to peer-check for typosquats (e.g. `@acme`; repeatable) |
 | `--no-scope-peers` | Disable automatic namespace peer typosquat checks |
@@ -246,6 +250,7 @@ Run from the repository root so SARIF paths are repository-relative.
 - Optional Omni Line registry URL to verify private existence
 - Poetry/`Pipfile` table-style dependency maps (requirements + PEP 621 covered today)
 - Gradle manifests, `conanfile.py`, and non-Hub OCI registries (GHCR, Quay, ECR)
+- Malicious-package checks for `pnpm-lock.yaml`, `Gemfile.lock`, `Cargo.lock`, and NuGet lockfiles (use [mal-check](https://github.com/omni-line/mal-check) for those today)
 
 ## Contributing
 
@@ -255,6 +260,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), [MAINTAINERS.md](MAINTAINERS.md), and
 ## License
 
 [MIT](LICENSE) · Copyright Omni Line and contributors · See [NOTICE](NOTICE).
+The embedded malicious-package database is derived from [OpenSSF malicious-packages](https://github.com/ossf/malicious-packages), [Apache-2.0](LICENSES/Apache-2.0.txt).
 
 ---
 
