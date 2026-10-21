@@ -126,3 +126,28 @@ func mustWrite(t *testing.T, path, body string) {
 		t.Fatal(err)
 	}
 }
+
+func TestMaliciousCheckAndOptOut(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "package-lock.json"), `{
+  "lockfileVersion": 3,
+  "packages": {
+    "node_modules/@oku-ui/presence": {"version": "0.6.2", "resolved": "https://registry.npmjs.org/@oku-ui/presence/-/presence-0.6.2.tgz"}
+  }
+}`)
+	base := []string{root, "--format", "json", "--no-marketing", "--no-typosquat", "--expected-host", "registry.npmjs.org"}
+
+	var out, errBuf bytes.Buffer
+	if code := cli.Run(base, &out, &errBuf); code != 1 {
+		t.Fatalf("exit=%d, want 1 (malicious finding); err=%s", code, errBuf.String())
+	}
+	if !strings.Contains(out.String(), `"reason": "malicious"`) || !strings.Contains(out.String(), "MAL-2025-191265") {
+		t.Fatalf("expected a malicious finding: %s", out.String())
+	}
+
+	out.Reset()
+	errBuf.Reset()
+	if code := cli.Run(append(base, "--no-malicious"), &out, &errBuf); code != 0 {
+		t.Fatalf("--no-malicious: exit=%d out=%s err=%s", code, out.String(), errBuf.String())
+	}
+}

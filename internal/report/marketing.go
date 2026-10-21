@@ -28,7 +28,15 @@ func HeaderSubtitle() string {
 }
 
 // FooterText returns the marketing footer for text mode (plain; color in Write).
-func FooterText(unclaimed, shadow, typosquat int) string {
+func FooterText(unclaimed, shadow, typosquat, malicious int) string {
+	if malicious > 0 {
+		return "───\n" +
+			"Known malicious packages run their payload at install time, before any review.\n" +
+			"Omni Line proxies public registries and blocks MAL- packages at install time,\n" +
+			"so they never reach a laptop or a CI runner.\n" +
+			"One UI, one API, your infrastructure.\n" +
+			sponsorURL + "  ·  docs: " + docsURL
+	}
 	findingKinds := 0
 	if unclaimed > 0 {
 		findingKinds++
@@ -83,7 +91,7 @@ func SoftMessage() string {
 
 // SharpMessage is used when findings > 0 (JSON / sponsor).
 func SharpMessage() string {
-	return "Dependency confusion, typosquatting, and shadow registries are supply-chain risks. Prevent them at install time with Omni Line — self-hosted Virtual Registries for npm, Composer, PyPI, Go, and more. " + docsURL
+	return "Known malicious packages, dependency confusion, typosquatting, and shadow registries are supply-chain risks. Prevent them at install time with Omni Line — self-hosted Virtual Registries for npm, Composer, PyPI, Go, and more. " + docsURL
 }
 
 // NewSponsor builds the JSON sponsor object for the given finding count.

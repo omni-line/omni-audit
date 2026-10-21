@@ -59,7 +59,7 @@ func TestTextIncludesMarketing(t *testing.T) {
 		"omniline.app/docs",
 		"Kept clean",
 		"safe place for your supply chain",
-		"✓ No unclaimed names, typosquats, or unexpected package sources found.",
+		"✓ No known malicious packages, unclaimed names, typosquats, or unexpected package sources found.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
@@ -400,5 +400,79 @@ func TestParseFormat(t *testing.T) {
 	}
 	if _, err := report.ParseFormat("xml"); err == nil {
 		t.Error("expected error")
+	}
+}
+
+func maliciousFinding() *scan.Result {
+	return &scan.Result{
+		Findings: []scan.Finding{{
+			Ecosystem:   "npm",
+			Package:     "@oku-ui/presence",
+			Version:     "0.6.2",
+			Manifest:    "package-lock.json",
+			Line:        7,
+			Group:       "resolved",
+			Reason:      scan.ReasonMalicious,
+			Severity:    scan.SeverityCritical,
+			URL:         "https://osv.dev/vulnerability/MAL-2025-191265",
+			IDs:         []string{"MAL-2025-191265"},
+			Campaign:    "shai-hulud",
+			Remediation: scan.RemediationMalicious,
+			Message:     `npm package "@oku-ui/presence" is a known malicious package (MAL-2025-191265)`,
+		}},
+		Stats: scan.Stats{Manifests: 1, Lockfiles: 1, Packages: 1, UniquePackages: 1, Findings: 1},
+	}
+}
+
+func TestMaliciousFindingText(t *testing.T) {
+	out, _ := write(t, maliciousFinding(), report.Options{Verbose: true, ForceMarket: true})
+	for _, want := range []string{
+		"✗ 1 known malicious package found",
+		"malicious",
+		"package-lock.json:7",
+		"published to a public registry as malware",
+		"malware",
+		scan.RemediationMalicious,
+		"is a known malicious package (MAL-2025-191265)",
+		"blocks MAL- packages at install time",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestMaliciousFindingSARIF(t *testing.T) {
+	out, _ := write(t, maliciousFinding(), report.Options{Format: report.FormatSARIF})
+	var doc struct {
+		Runs []struct {
+			Tool struct {
+				Driver struct {
+					Rules []struct {
+						ID string `json:"id"`
+					} `json:"rules"`
+				} `json:"driver"`
+			} `json:"tool"`
+			Results []struct {
+				RuleID     string            `json:"ruleId"`
+				Level      string            `json:"level"`
+				Properties map[string]string `json:"properties"`
+			} `json:"results"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatal(err)
+	}
+	run := doc.Runs[0]
+	rules := make([]string, 0, len(run.Tool.Driver.Rules))
+	for _, r := range run.Tool.Driver.Rules {
+		rules = append(rules, r.ID)
+	}
+	if fmt.Sprint(rules) != "[OA001 OA002 OA003 OA004]" {
+		t.Fatalf("rules = %v", rules)
+	}
+	r := run.Results[0]
+	if r.RuleID != "OA004" || r.Level != "error" || r.Properties["ids"] != "MAL-2025-191265" || r.Properties["campaign"] != "shai-hulud" {
+		t.Fatalf("result = %+v", r)
 	}
 }

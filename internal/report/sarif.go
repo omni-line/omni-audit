@@ -21,6 +21,7 @@ const (
 	sarifRuleUnclaimed = "OA001"
 	sarifRuleShadow    = "OA002"
 	sarifRuleTyposquat = "OA003"
+	sarifRuleMalicious = "OA004"
 	toolInfoURI        = "https://github.com/omni-line/omni-audit"
 	fingerprintK       = "omniAudit/v1"
 )
@@ -112,7 +113,7 @@ func writeSARIF(w io.Writer, res *scan.Result, opts Options) error {
 				Name:           "omni-audit",
 				Version:        strings.TrimPrefix(opts.Version, "v"),
 				InformationURI: toolInfoURI,
-				Rules:          []sarifRule{unclaimedRule(), shadowRule(), typosquatRule()},
+				Rules:          []sarifRule{unclaimedRule(), shadowRule(), typosquatRule(), maliciousRule()},
 			}},
 			Invocations: []sarifInvocation{invocation(res)},
 			Results:     make([]sarifResult, 0, len(res.Findings)),
@@ -207,6 +208,31 @@ func typosquatRule() sarifRule {
 	}
 }
 
+func maliciousRule() sarifRule {
+	return sarifRule{
+		ID:   sarifRuleMalicious,
+		Name: "KnownMaliciousPackage",
+		ShortDescription: sarifText{
+			Text: "Dependency was published to a public registry as malware",
+		},
+		FullDescription: sarifText{
+			Text: "The dependency matches an OpenSSF malicious-packages (MAL-) advisory for this " +
+				"name, at this version or at every version. Malicious packages typically run " +
+				"their payload in install scripts, so any machine that installed it may be compromised.",
+		},
+		Help: sarifText{
+			Text: scan.RemediationMalicious,
+		},
+		HelpURI:              toolInfoURI + "#readme",
+		DefaultConfiguration: sarifRuleConfig{Level: "error"},
+		Properties: map[string]any{
+			"tags":              []string{"security", "supply-chain", "malware"},
+			"security-severity": "9.8",
+			"precision":         "very-high",
+		},
+	}
+}
+
 func invocation(res *scan.Result) sarifInvocation {
 	inv := sarifInvocation{ExecutionSuccessful: res.Complete()}
 	for _, wn := range res.Warnings {
@@ -235,6 +261,9 @@ func sarifFinding(f scan.Finding) sarifResult {
 		if f.ResolvedURL != "" {
 			msg += " Resolved URL: " + f.ResolvedURL + "."
 		}
+	case scan.ReasonMalicious:
+		ruleID = sarifRuleMalicious
+		msg = f.Message + "."
 	case scan.ReasonTyposquat:
 		ruleID = sarifRuleTyposquat
 		switch {
@@ -285,6 +314,12 @@ func sarifFinding(f scan.Finding) sarifResult {
 		sev = scan.SeverityHigh
 	}
 	props["severity"] = sev
+	if len(f.IDs) > 0 {
+		props["ids"] = strings.Join(f.IDs, ", ")
+	}
+	if f.Campaign != "" {
+		props["campaign"] = f.Campaign
+	}
 	if f.Namespace != "" {
 		props["namespace"] = f.Namespace
 	}

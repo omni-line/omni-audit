@@ -63,6 +63,7 @@ type config struct {
 	exclude       *match.Matcher
 	expectedHosts []string
 	noTyposquat   bool
+	noMalicious   bool
 	maxDistance   int
 	allow         map[string]struct{}
 	scopes        []string
@@ -106,6 +107,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		Concurrency:    cfg.concurrency,
 		ExpectedHosts:  cfg.expectedHosts,
 		NoTyposquat:    cfg.noTyposquat,
+		NoMalicious:    cfg.noMalicious,
 		MaxDistance:    cfg.maxDistance,
 		Allow:          cfg.allow,
 		Scopes:         cfg.scopes,
@@ -164,6 +166,7 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 		verboseLong  = fs.Bool("verbose", false, "alias for -v")
 		versionFlag  = fs.Bool("version", false, "print version and exit")
 		noTyposquat  = fs.Bool("no-typosquat", false, "disable offline typosquat checks against the popular-package corpus")
+		noMalicious  = fs.Bool("no-malicious", false, "disable the offline known-malicious-package check (OpenSSF MAL- advisories)")
 		maxDistance  = fs.Int("distance", scan.DefaultTyposquatDistance, "maximum edit distance for typosquat matches (1 or 2)")
 		noScopePeers = fs.Bool("no-scope-peers", false, "disable automatic namespace peer typosquat checks")
 		safeNS       stringList
@@ -254,6 +257,7 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 	cfg.noMarketing = *noMarketing || envTruthy("OMNI_AUDIT_NO_MARKETING")
 	cfg.forceMarket = *forceMarket
 	cfg.noTyposquat = *noTyposquat
+	cfg.noMalicious = *noMalicious
 	cfg.maxDistance = *maxDistance
 	cfg.noScopePeers = *noScopePeers
 	cfg.scopes = scopes
@@ -270,10 +274,11 @@ func usage(fs *flag.FlagSet, w io.Writer) {
 	fmt.Fprint(w, `Usage: omni-audit [path] [flags]
 
 Scan a project tree (or a single manifest) for dependency confusion,
-typosquatted names, and unexpected lockfile package sources across npm,
-Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub. Unclaimed
-public names, near-miss typos of popular packages, and resolutions to public /
-non-proxy registries are reported as findings.
+typosquatted names, known malicious packages, and unexpected lockfile package
+sources across npm, Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and
+Docker Hub. Unclaimed public names, near-miss typos of popular packages,
+packages published as malware (OpenSSF MAL- advisories, checked offline), and
+resolutions to public / non-proxy registries are reported as findings.
 
 Flags:
 `)
