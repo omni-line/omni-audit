@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Offline registry configuration audit (`reason=registry_config`, SARIF rule
+  `OA005`, risk in `kind`). Checks `.npmrc`, `.yarnrc.yml`, `.yarnrc`,
+  `pip.conf` / `pip.ini`, requirements and constraints files, `pyproject.toml`
+  (uv / Poetry), `uv.toml`, `Pipfile`, `composer.json`, Composer `auth.json`,
+  `Gemfile` / `gems.rb`, `.cargo/config.toml` / `credentials.toml`, Maven
+  `settings.xml`, and pip / uv commands in Dockerfiles, CI pipelines,
+  Makefiles, and shell scripts. Flags `--extra-index-url` and pipenv
+  `install_search_all_sources` (`extra_index`), uv `unsafe-*` index strategies,
+  Composer `"canonical": false`, multiple global Gemfile sources (all `high`),
+  plaintext registry credentials (`high`; never printed, skipped in
+  `.gitignore`d files), and plain HTTP / disabled TLS (`medium`). Disable with
+  `--no-registry-config`
+- `stats.config_files` in JSON; `config` warning kind
+
+### Changed
+
+- Scans of repositories with risky registry settings now report findings and
+  exit `1` by default. Use `--no-registry-config` or `--min-severity high` to
+  keep the previous behavior while you fix them
+
 ## [0.8.0] — 2026-10-21
 
 ### Added
