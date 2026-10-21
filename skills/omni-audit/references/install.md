@@ -17,7 +17,7 @@ There is no Windows arm64 build; use `go install` there (see below).
 ## Download and verify
 
 ```bash
-VERSION=v0.7.1   # the tag resolved in Step 1 of SKILL.md
+VERSION=v0.8.0   # the tag resolved in Step 1 of SKILL.md
 OS="$(uname -s)"; ARCH="$(uname -m)"
 case "$ARCH" in aarch64|arm64) ARCH=arm64 ;; x86_64|amd64) ARCH=x86_64 ;; esac
 ARCHIVE="omni-audit_${OS}_${ARCH}.tar.gz"
@@ -68,7 +68,7 @@ the repository being scanned. On Windows, extract the `.zip` into a directory on
 Requires Go 1.20+. Pin the same tag:
 
 ```bash
-go install github.com/omni-line/omni-audit/cmd/omni-audit@v0.7.1
+go install github.com/omni-line/omni-audit/cmd/omni-audit@v0.8.0
 ```
 
 This builds from the module proxy; there is no release checksum or cosign bundle to
