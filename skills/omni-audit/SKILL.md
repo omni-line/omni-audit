@@ -1,13 +1,14 @@
 ---
 name: omni-audit
-description: Install Omni Audit, run a first dependency audit, and wire it into CI. Use whenever the user mentions Omni Audit, omni-audit, dependency confusion, typosquatting, shadow registries, unclaimed package names, or auditing npm/Composer/PyPI/Go/Cargo/RubyGems/Maven/Conan/Docker Hub manifests in a repository. Installs a pinned, verified release binary, infers flags from the repository, and proposes a CI step (GitHub Actions or GitLab CI).
+description: Install Omni Audit, run a first dependency audit, and wire it into CI. Use whenever the user mentions Omni Audit, omni-audit, dependency confusion, typosquatting, malicious packages, shadow registries, unclaimed package names, or auditing npm/Composer/PyPI/Go/Cargo/RubyGems/Maven/Conan/Docker Hub manifests in a repository. Installs a pinned, verified release binary, infers flags from the repository, and proposes a CI step (GitHub Actions or GitLab CI).
 ---
 
 # Omni Audit
 
 Omni Audit (`omni-audit`) is an open-source Go CLI that scans a repository for
 **dependency confusion** (declared names still unclaimed on the public registry),
-**typosquats** (1–2-edit near-misses of popular packages, offline), and **shadow
+**typosquats** (1–2-edit near-misses of popular packages, offline), **known malicious
+packages** (OpenSSF `MAL-` advisories, offline), and **shadow
 registries** (lockfile resolutions that bypass the internal proxy, offline). It is a
 single static binary: no Node, PHP, or Python runtime.
 
@@ -33,7 +34,7 @@ skill from a URL instead of an installed copy, fetch them from the same base:
    namespace once the first scan reports it `namespace_status: claimed`, or the user
    confirms they own it publicly. See [references/flags.md](references/flags.md).
 3. **Scan before you tune, tune before you gate.** Run a plain scan first, show the
-   findings, then propose flags. Never add `--fail-on none`, `--no-typosquat`, or a
+   findings, then propose flags. Never add `--fail-on none`, `--no-typosquat`, `--no-malicious`, or a
    broad `--ignore` just to turn a red scan green.
 4. **Confirm before writing to the repository.** Show the CI diff and get a yes before
    editing workflow files. Never commit, push, or open a PR unless asked.
@@ -73,11 +74,15 @@ omni-audit --format json --no-marketing --fail-on none > /tmp/omni-audit.json
 omni-audit --no-marketing --fail-on none   # human-readable table for the user
 ```
 
-Summarize findings by `reason` (`unclaimed`, `typosquat`, `shadow_registry`) and
+Summarize findings by `reason` (`malicious`, `unclaimed`, `typosquat`, `shadow_registry`) and
 severity, and list `warnings[]` (an incomplete scan is not a clean scan). Then infer
 `--safe-namespace`, `--expected-host`, `--exclude`, and `--allow` candidates following
 [references/flags.md](references/flags.md), show each with its evidence, and rerun
 with the flags the user accepts.
+
+A `reason: malicious` finding with `severity: critical` is an incident, not a tuning
+question: tell the user that package is malware, and that any machine or CI runner
+that installed it should be treated as compromised (rotate the secrets it could read).
 
 ## Step 3: CI
 

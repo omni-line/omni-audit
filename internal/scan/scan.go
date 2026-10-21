@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/omni-line/mal-check/pkg/maldb"
 	"github.com/omni-line/omni-audit/internal/discover"
 	"github.com/omni-line/omni-audit/internal/ecosystem"
 	"github.com/omni-line/omni-audit/internal/lockfile"
@@ -24,6 +25,9 @@ const (
 	ReasonShadowRegistry = "shadow_registry"
 	// ReasonTyposquat marks a name that is a near-miss of a popular package.
 	ReasonTyposquat = "typosquat"
+	// ReasonMalicious marks a package published to a public registry as
+	// malware (an OpenSSF MAL- advisory for this name and version).
+	ReasonMalicious = "malicious"
 )
 
 // Finding severities. Additive JSON fields; default for unscoped names is high.
@@ -82,6 +86,8 @@ type Finding struct {
 	Technique       string   `json:"technique,omitempty"`
 	SuggestionURL   string   `json:"suggestion_url,omitempty"`
 	Message         string   `json:"message,omitempty"`
+	IDs             []string `json:"ids,omitempty"`
+	Campaign        string   `json:"campaign,omitempty"`
 }
 
 // Warning is a non-fatal issue that may leave the scan incomplete.
@@ -141,6 +147,11 @@ type Options struct {
 	Lockfiles []lockfile.Kind
 	// NoTyposquat disables offline popular-package / scope-peer typosquat checks.
 	NoTyposquat bool
+	// NoMalicious disables the offline known-malicious-package check.
+	NoMalicious bool
+	// Malicious overrides the malicious-package database; nil means the
+	// embedded snapshot (maldb.Default).
+	Malicious *maldb.DB
 	// MaxDistance is the maximum edit distance for typosquat matches (1 or 2).
 	MaxDistance int
 	// Allow lists exact package names treated as safe for typosquat checks.
@@ -349,13 +360,18 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 		})
 	}
 
-	auditLockfiles(root, opts, res)
+	locked := auditLockfiles(root, opts, res)
 
 	if typos, err := auditTyposquats(opts, occs); err != nil {
 		return nil, err
 	} else {
 		res.Findings = append(res.Findings, typos...)
 	}
+	mal, err := auditMalicious(opts, occs, locked)
+	if err != nil {
+		return nil, err
+	}
+	res.Findings = append(supersedeUnclaimed(res.Findings, mal), mal...)
 
 	sortFindings(res.Findings)
 	sortWarnings(res.Warnings)
@@ -373,13 +389,15 @@ func parse(eco *ecosystem.Ecosystem, m discover.Manifest) ([]manifest.Dependency
 	return eco.Parse(m.Rel, data)
 }
 
-func auditLockfiles(root string, opts Options, res *Result) {
+// auditLockfiles flags resolutions outside the expected hosts and returns
+// every resolution for the malicious-package audit.
+func auditLockfiles(root string, opts Options, res *Result) []lockedDep {
 	kinds := opts.Lockfiles
 	if kinds == nil {
 		kinds = lockfile.Default()
 	}
 	if len(kinds) == 0 {
-		return
+		return nil
 	}
 
 	walk, err := discover.Walk(root, discover.Options{
@@ -390,9 +408,10 @@ func auditLockfiles(root string, opts Options, res *Result) {
 	})
 	if err != nil {
 		res.Warnings = append(res.Warnings, Warning{Kind: WarnLockfile, Message: err.Error()})
-		return
+		return nil
 	}
 	res.Stats.Lockfiles = len(walk.Manifests)
+	var locked []lockedDep
 	for _, p := range walk.Problems {
 		res.Warnings = append(res.Warnings, Warning{Kind: WarnWalk, Manifest: p.Path, Message: p.Err.Error()})
 	}
@@ -418,6 +437,7 @@ func auditLockfiles(root string, opts Options, res *Result) {
 				res.Stats.Skipped++
 				continue
 			}
+			locked = append(locked, lockedDep{ecosystem: m.Ecosystem, name: d.Name, version: d.Version, manifest: m.Path, line: d.Line})
 			host, _, bad := lockfile.Violation(d.URL, opts.ExpectedHosts)
 			if !bad {
 				continue
@@ -439,6 +459,7 @@ func auditLockfiles(root string, opts Options, res *Result) {
 			})
 		}
 	}
+	return locked
 }
 
 // allowlisted matches both the declared and the normalized name so that

@@ -65,7 +65,7 @@ This adds a `Signed-off-by:` trailer. See https://developercertificate.org/.
 | `internal/manifest` | Shared `Dependency` type, safe file reads; parsers per ecosystem |
 | `internal/lockfile` | Lockfile parsers and host policy for source / shadow-registry auditing |
 | `internal/registry` | `Checker` interface and the shared HTTP `Prober` (HEAD/Fetch, retries, redirects); clients per ecosystem |
-| `internal/scan` | Orchestration: confusion checks, lockfile shadow-registry audit, typosquat |
+| `internal/scan` | Orchestration: confusion checks, lockfile shadow-registry audit, typosquat, malicious packages (OpenSSF `MAL-`, via `mal-check/pkg/maldb`) |
 | `internal/corpus` | Embedded popular-package snapshots for offline typosquat checks |
 | `internal/distance` | OSA edit distance + typosquat technique classification |
 | `internal/report` | Text / JSON / SARIF output, exit codes, marketing |

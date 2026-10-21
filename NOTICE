@@ -2,3 +2,10 @@ Omni Audit
 Copyright (c) 2026 Omni Line and contributors
 
 This product is backed by Omni Line (https://omniline.app).
+
+The malicious-package database embedded in the binary comes from the Go module
+github.com/omni-line/mal-check (pkg/maldb, MIT License, Copyright (c) 2026 Omni
+Line). Its data is derived from OpenSSF malicious-packages
+(https://github.com/ossf/malicious-packages) and its contributors, licensed
+under the Apache License, Version 2.0 (see LICENSES/Apache-2.0.txt; upstream
+ships no NOTICE file).

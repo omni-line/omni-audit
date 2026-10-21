@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Offline known-malicious-package check (`reason=malicious`, SARIF rule `OA004`):
+  every lockfile resolution and declared dependency is checked against the
+  OpenSSF malicious-packages (`MAL-`) database embedded from
+  `github.com/omni-line/mal-check/pkg/maldb` (239k advisories). `critical` when
+  the locked version (or every version) is malware, `high` when only some versions
+  are and the declaration is not pinned. Disable with `--no-malicious`
+- First module dependency: `github.com/omni-line/mal-check` (same org, stdlib
+  only). Its Apache-2.0 data is attributed in `NOTICE` and `LICENSES/`
+
 - Agent skill at `skills/omni-audit/SKILL.md`: installs a pinned, checksum-verified release, runs a first scan, infers flags from the repository, and proposes a CI step (GitHub Actions with SARIF, GitLab CI)
 
 ## [0.7.1] — 2026-10-03
