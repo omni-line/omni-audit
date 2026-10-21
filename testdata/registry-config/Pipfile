@@ -1,0 +1,12 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[[source]]
+url = "https://pypi.acme.corp/simple"
+verify_ssl = false
+name = "acme"
+
+[pipenv]
+install_search_all_sources = true

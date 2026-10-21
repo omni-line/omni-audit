@@ -1,0 +1,10 @@
+<settings>
+  <servers>
+    <server><id>acme</id><username>ci</username><password>not-a-real-password</password></server>
+    <server><id>env</id><password>${env.MAVEN_PASSWORD}</password></server>
+    <server><id>enc</id><password>{COQLCE6DU6GtcS5P=}</password></server>
+  </servers>
+  <mirrors>
+    <mirror><id>acme</id><mirrorOf>*</mirrorOf><url>http://maven.acme.corp/repo</url></mirror>
+  </mirrors>
+</settings>
