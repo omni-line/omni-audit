@@ -14,6 +14,7 @@ import (
 	"github.com/omni-line/omni-audit/internal/lockfile"
 	"github.com/omni-line/omni-audit/internal/manifest"
 	"github.com/omni-line/omni-audit/internal/match"
+	"github.com/omni-line/omni-audit/internal/regconfig"
 	"github.com/omni-line/omni-audit/internal/registry"
 )
 
@@ -28,6 +29,10 @@ const (
 	// ReasonMalicious marks a package published to a public registry as
 	// malware (an OpenSSF MAL- advisory for this name and version).
 	ReasonMalicious = "malicious"
+	// ReasonConfig marks a risky package-manager configuration setting
+	// (extra indexes, non-canonical repositories, plaintext credentials,
+	// plain HTTP); Kind holds the regconfig risk.
+	ReasonConfig = "registry_config"
 )
 
 // Finding severities. Additive JSON fields; default for unscoped names is high.
@@ -105,6 +110,8 @@ type Stats struct {
 	Manifests int `json:"manifests"`
 	// Lockfiles is the number of lockfiles discovered for source auditing.
 	Lockfiles int `json:"lockfiles"`
+	// ConfigFiles is the number of package-manager configuration files audited.
+	ConfigFiles int `json:"config_files"`
 	// Packages counts dependency declarations across all manifests.
 	Packages int `json:"packages"`
 	// ResolvedPackages counts lockfile resolutions inspected for source policy.
@@ -152,6 +159,11 @@ type Options struct {
 	// Malicious overrides the malicious-package database; nil means the
 	// embedded snapshot (maldb.Default).
 	Malicious *maldb.DB
+	// NoConfig disables the offline package-manager configuration audit.
+	NoConfig bool
+	// ConfigFiles overrides the audited configuration formats; nil means
+	// regconfig.Default().
+	ConfigFiles []regconfig.File
 	// MaxDistance is the maximum edit distance for typosquat matches (1 or 2).
 	MaxDistance int
 	// Allow lists exact package names treated as safe for typosquat checks.
@@ -221,8 +233,9 @@ func ParseSeverity(s string) (string, error) {
 
 // Run discovers manifests and lockfiles under root, checks each distinct
 // package name once against its public registry, audits lockfile resolution
-// URLs for unexpected / public registry hosts, and (by default) compares
-// declared names to an embedded popular-package corpus for typosquats.
+// URLs for unexpected / public registry hosts, audits package-manager
+// configuration files, and (by default) compares declared names to an
+// embedded popular-package corpus for typosquats.
 // On cancellation it returns the partial result together with ctx.Err().
 func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 	start := time.Now()
@@ -361,6 +374,7 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 	}
 
 	locked := auditLockfiles(root, opts, res)
+	auditConfig(root, opts, res)
 
 	if typos, err := auditTyposquats(opts, occs); err != nil {
 		return nil, err
