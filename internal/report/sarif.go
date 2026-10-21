@@ -22,6 +22,7 @@ const (
 	sarifRuleShadow    = "OA002"
 	sarifRuleTyposquat = "OA003"
 	sarifRuleMalicious = "OA004"
+	sarifRuleRegConfig = "OA005"
 	toolInfoURI        = "https://github.com/omni-line/omni-audit"
 	fingerprintK       = "omniAudit/v1"
 )
@@ -113,7 +114,7 @@ func writeSARIF(w io.Writer, res *scan.Result, opts Options) error {
 				Name:           "omni-audit",
 				Version:        strings.TrimPrefix(opts.Version, "v"),
 				InformationURI: toolInfoURI,
-				Rules:          []sarifRule{unclaimedRule(), shadowRule(), typosquatRule(), maliciousRule()},
+				Rules:          []sarifRule{unclaimedRule(), shadowRule(), typosquatRule(), maliciousRule(), configRule()},
 			}},
 			Invocations: []sarifInvocation{invocation(res)},
 			Results:     make([]sarifResult, 0, len(res.Findings)),
@@ -233,6 +234,33 @@ func maliciousRule() sarifRule {
 	}
 }
 
+func configRule() sarifRule {
+	return sarifRule{
+		ID:   sarifRuleRegConfig,
+		Name: "RiskyRegistryConfiguration",
+		ShortDescription: sarifText{
+			Text: "Package-manager configuration enables dependency confusion, leaks a credential, or disables TLS",
+		},
+		FullDescription: sarifText{
+			Text: "A configuration file (.npmrc, .yarnrc.yml, pip.conf, requirements, pyproject.toml, " +
+				"Pipfile, composer.json, auth.json, Gemfile, .cargo/config.toml, settings.xml, or a " +
+				"build script) merges public and internal indexes, makes a repository non-canonical, " +
+				"stores a registry credential in plain text, or reaches a registry without verified TLS.",
+		},
+		Help: sarifText{
+			Text: "Use one registry URL that serves internal and public packages, keep credentials in " +
+				"environment variables or user-level config, and use HTTPS with certificate checks.",
+		},
+		HelpURI:              toolInfoURI + "#readme",
+		DefaultConfiguration: sarifRuleConfig{Level: "error"},
+		Properties: map[string]any{
+			"tags":              []string{"security", "supply-chain", "dependency-confusion", "configuration"},
+			"security-severity": "7.5",
+			"precision":         "high",
+		},
+	}
+}
+
 func invocation(res *scan.Result) sarifInvocation {
 	inv := sarifInvocation{ExecutionSuccessful: res.Complete()}
 	for _, wn := range res.Warnings {
@@ -264,6 +292,9 @@ func sarifFinding(f scan.Finding) sarifResult {
 	case scan.ReasonMalicious:
 		ruleID = sarifRuleMalicious
 		msg = f.Message + "."
+	case scan.ReasonConfig:
+		ruleID = sarifRuleRegConfig
+		msg = fmt.Sprintf("%s setting %q: %s.", f.Ecosystem, f.Package, f.Message)
 	case scan.ReasonTyposquat:
 		ruleID = sarifRuleTyposquat
 		switch {

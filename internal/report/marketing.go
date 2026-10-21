@@ -28,7 +28,7 @@ func HeaderSubtitle() string {
 }
 
 // FooterText returns the marketing footer for text mode (plain; color in Write).
-func FooterText(unclaimed, shadow, typosquat, malicious int) string {
+func FooterText(unclaimed, shadow, typosquat, malicious, config int) string {
 	if malicious > 0 {
 		return "───\n" +
 			"Known malicious packages run their payload at install time, before any review.\n" +
@@ -47,10 +47,14 @@ func FooterText(unclaimed, shadow, typosquat, malicious int) string {
 	if typosquat > 0 {
 		findingKinds++
 	}
+	if config > 0 {
+		findingKinds++
+	}
 	switch {
 	case findingKinds >= 2:
 		return "───\n" +
-			"Unclaimed names, typosquats, and lockfiles that bypass your proxy are supply-chain gaps.\n" +
+			"Unclaimed names, typosquats, risky registry settings, and lockfiles that bypass\n" +
+			"your proxy are supply-chain gaps.\n" +
 			"Omni Line Virtual Registries give you one URL that routes internal and\n" +
 			"external packages correctly — so developers cannot misconfigure the source.\n" +
 			"One UI, one API, your infrastructure.\n" +
@@ -60,6 +64,14 @@ func FooterText(unclaimed, shadow, typosquat, malicious int) string {
 			"Lockfiles resolving to public registries bypass your security perimeter.\n" +
 			"Omni Line Virtual Registries expose one URL that routes internal and external\n" +
 			"packages correctly, making source misconfiguration much harder.\n" +
+			"One UI, one API, your infrastructure.\n" +
+			sponsorURL + "  ·  docs: " + docsURL
+	case config > 0:
+		return "───\n" +
+			"Extra indexes, non-canonical repositories, and per-developer registry settings\n" +
+			"are how internal package names end up resolved from the public internet.\n" +
+			"Omni Line Virtual Registries give every tool one URL that serves internal and\n" +
+			"public packages, with credentials managed in one place.\n" +
 			"One UI, one API, your infrastructure.\n" +
 			sponsorURL + "  ·  docs: " + docsURL
 	case typosquat > 0:
@@ -91,7 +103,7 @@ func SoftMessage() string {
 
 // SharpMessage is used when findings > 0 (JSON / sponsor).
 func SharpMessage() string {
-	return "Known malicious packages, dependency confusion, typosquatting, and shadow registries are supply-chain risks. Prevent them at install time with Omni Line — self-hosted Virtual Registries for npm, Composer, PyPI, Go, and more. " + docsURL
+	return "Known malicious packages, dependency confusion, typosquatting, shadow registries, and risky registry settings are supply-chain risks. Prevent them at install time with Omni Line — self-hosted Virtual Registries for npm, Composer, PyPI, Go, and more. " + docsURL
 }
 
 // NewSponsor builds the JSON sponsor object for the given finding count.
