@@ -36,7 +36,7 @@ skill from a URL instead of an installed copy, fetch them from the same base:
    namespace once the first scan reports it `namespace_status: claimed`, or the user
    confirms they own it publicly. See [references/flags.md](references/flags.md).
 3. **Scan before you tune, tune before you gate.** Run a plain scan first, show the
-   findings, then propose flags. Never add `--fail-on none`, `--no-typosquat`, `--no-malicious`, `--no-registry-config`, or a
+   findings, then propose flags. Never add `--fail-on none`, `--only`, `--no-unclaimed`, `--no-sources`, `--no-typosquat`, `--no-malicious`, `--no-registry-config`, or a
    broad `--ignore` just to turn a red scan green.
 4. **Confirm before writing to the repository.** Show the CI diff and get a yes before
    editing workflow files. Never commit, push, or open a PR unless asked.

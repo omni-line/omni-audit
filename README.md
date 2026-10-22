@@ -183,6 +183,9 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
 | `--allow` | Exact package names treated as safe for typosquat checks |
 | `--expected-host` | Internal registry hostname or URL; lockfile resolutions outside these hosts are findings (repeatable / comma-separated). Without this flag, only known public registry hosts are flagged. |
 | `--exclude` | Skip paths: directory/file names or globs relative to the scan root |
+| `--only` | Run only these checks: `unclaimed`, `shadow_registry`, `typosquat`, `malicious`, `registry_config` (repeatable / comma-separated; the same names as `reason`). `--only malicious,typosquat,registry_config` makes no network requests |
+| `--no-unclaimed` | Disable the public-registry checks for unclaimed names (the only check that uses the network) |
+| `--no-sources` | Disable the lockfile audit for resolutions outside the expected registry hosts (lockfiles are still read for the malicious-package check) |
 | `--no-typosquat` | Disable offline typosquat checks |
 | `--no-malicious` | Disable the offline known-malicious-package check |
 | `--no-registry-config` | Disable the offline audit of package-manager config files |
