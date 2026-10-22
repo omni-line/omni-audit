@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-10-22
+
 ### Added
 
 - Offline registry configuration audit (`reason=registry_config`, SARIF rule
@@ -26,8 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Scans of repositories with risky registry settings now report findings and
-  exit `1` by default. Use `--no-registry-config` or `--min-severity high` to
-  keep the previous behavior while you fix them
+  exit `1` by default. Use `--no-registry-config` to keep the previous behavior
+  while you fix them
 
 ## [0.8.0] — 2026-10-21
 

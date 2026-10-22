@@ -30,7 +30,7 @@ jobs:
       contents: read
       security-events: write   # SARIF upload
     env:
-      OMNI_AUDIT_VERSION: v0.8.0
+      OMNI_AUDIT_VERSION: v0.9.0
       OMNI_AUDIT_NO_MARKETING: "1"
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +72,7 @@ omni-audit:
   stage: test
   image: alpine:3.20
   variables:
-    OMNI_AUDIT_VERSION: v0.8.0
+    OMNI_AUDIT_VERSION: v0.9.0
     OMNI_AUDIT_NO_MARKETING: "1"
   before_script:
     - apk add --no-cache curl
