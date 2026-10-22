@@ -1,0 +1,111 @@
+name: Omni Audit
+description: Scan for dependency confusion, typosquats, known malicious packages, shadow registries, and risky registry settings.
+author: Omni Line
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  path:
+    description: Directory or manifest to scan, relative to the workspace.
+    default: "."
+  args:
+    description: >-
+      Extra omni-audit flags, parsed like a shell command line
+      (for example `--safe-namespace '@acme/*' --min-severity high`).
+    default: ""
+  version:
+    description: >-
+      Release to run (for example `v0.9.2`). Defaults to the tag this action
+      is used at, or the latest release when it is used at a branch or SHA.
+    default: ""
+  sarif:
+    description: >-
+      Write SARIF to `sarif-file` instead of text to the log, for
+      github/codeql-action/upload-sarif.
+    default: "false"
+  sarif-file:
+    description: Path of the SARIF file when `sarif` is true.
+    default: omni-audit.sarif
+
+outputs:
+  exit-code:
+    description: omni-audit exit code (0 clean, 1 findings, 2 error).
+    value: ${{ steps.run.outputs.exit-code }}
+  sarif-file:
+    description: Path of the SARIF file, when `sarif` is true.
+    value: ${{ steps.run.outputs.sarif-file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install omni-audit
+      id: install
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        set -euo pipefail
+        case "$RUNNER_OS" in
+          Linux) os=Linux ext=tar.gz exe=omni-audit ;;
+          macOS) os=Darwin ext=tar.gz exe=omni-audit ;;
+          Windows) os=Windows ext=zip exe=omni-audit.exe ;;
+          *) echo "::error::unsupported runner OS $RUNNER_OS"; exit 2 ;;
+        esac
+        case "$RUNNER_ARCH" in
+          X64) arch=x86_64 ;;
+          ARM64) arch=arm64 ;;
+          *) echo "::error::unsupported runner arch $RUNNER_ARCH"; exit 2 ;;
+        esac
+        if [ -z "$VERSION" ] && [[ "$ACTION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          VERSION=$ACTION_REF
+        fi
+        if [ -z "$VERSION" ] || [ "$VERSION" = latest ]; then
+          base=https://github.com/omni-line/omni-audit/releases/latest/download
+        else
+          base=https://github.com/omni-line/omni-audit/releases/download/$VERSION
+        fi
+        archive="omni-audit_${os}_${arch}.${ext}"
+        dir="$RUNNER_TEMP/omni-audit"
+        mkdir -p "$dir"
+        cd "$dir"
+        curl -fsSL --retry 3 -o "$archive" "$base/$archive"
+        curl -fsSL --retry 3 -o checksums.txt "$base/checksums.txt"
+        want=$(awk -v f="$archive" '$2 == f { print $1 }' checksums.txt)
+        if command -v sha256sum >/dev/null; then
+          got=$(sha256sum "$archive" | awk '{ print $1 }')
+        else
+          got=$(shasum -a 256 "$archive" | awk '{ print $1 }')
+        fi
+        if [ -z "$want" ] || [ "$want" != "$got" ]; then
+          echo "::error::checksum mismatch for $archive"
+          exit 2
+        fi
+        if [ "$ext" = zip ]; then unzip -oq "$archive"; else tar xzf "$archive"; fi
+        echo "bin=$dir/$exe" >> "$GITHUB_OUTPUT"
+        "$dir/$exe" --version
+
+    - name: Run omni-audit
+      id: run
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        BIN: ${{ steps.install.outputs.bin }}
+        SCAN_PATH: ${{ inputs.path }}
+        ARGS: ${{ inputs.args }}
+        SARIF: ${{ inputs.sarif }}
+        SARIF_FILE: ${{ inputs.sarif-file }}
+      run: |
+        set -uo pipefail
+        # args is written by the workflow author, like a run: step.
+        eval "set -- $ARGS"
+        code=0
+        if [ "$SARIF" = true ]; then
+          "$BIN" "$SCAN_PATH" --format sarif "$@" > "$SARIF_FILE" || code=$?
+          echo "sarif-file=$SARIF_FILE" >> "$GITHUB_OUTPUT"
+        else
+          "$BIN" "$SCAN_PATH" "$@" || code=$?
+        fi
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        exit "$code"

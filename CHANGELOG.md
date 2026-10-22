@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   malicious versions)
 - `checks` in JSON lists the checks that ran; the text clean message names only
   those checks
+- GitHub Action (`uses: omni-line/omni-audit@<tag>`): installs the release
+  binary for the runner after verifying `checksums.txt`, runs the scan, and can
+  write SARIF for code scanning
 
 ## [0.9.1] — 2026-10-22
 

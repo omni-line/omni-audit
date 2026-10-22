@@ -243,6 +243,39 @@ Environment:
 
 JSON includes an optional top-level `sponsor` object by default. Use `--no-marketing` or `-q` for a silent machine payload.
 
+## GitHub Action
+
+```yaml
+- uses: actions/checkout@v4
+- uses: omni-line/omni-audit@v0.10.0
+  with:
+    args: --safe-namespace '@your-org/*' --strict
+```
+
+The action downloads the release binary for the runner (Linux, macOS, or
+Windows; x64 or arm64), verifies it against `checksums.txt`, and runs it. It
+fails the step on findings, like the CLI.
+
+| Input | Default | Description |
+| --- | --- | --- |
+| `path` | `.` | Directory or manifest to scan |
+| `args` | | Extra flags, parsed like a shell command line |
+| `version` | the action's tag | Release to run; the latest release when the action is used at a branch or SHA |
+| `sarif` | `false` | Write SARIF to `sarif-file` instead of text to the log |
+| `sarif-file` | `omni-audit.sarif` | SARIF output path |
+
+Outputs: `exit-code` and `sarif-file`. For GitHub code scanning:
+
+```yaml
+- uses: omni-line/omni-audit@v0.10.0
+  with:
+    sarif: true
+    args: --fail-on none
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: omni-audit.sarif
+```
+
 ## CI example
 
 ```yaml
