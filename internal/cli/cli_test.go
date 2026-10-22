@@ -172,3 +172,54 @@ func TestRegistryConfigAuditAndOptOut(t *testing.T) {
 		t.Fatalf("--no-registry-config: exit=%d out=%s err=%s", code, out.String(), errBuf.String())
 	}
 }
+
+func TestOnlyRunsNamedChecks(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, ".npmrc"), "//npm.acme.corp/:_authToken=not-a-real-token\n")
+	mustWrite(t, filepath.Join(root, "package.json"), `{"dependencies": {"acme-internal-xyz": "1.0.0"}}`)
+	base := []string{root, "--format", "json", "--no-marketing"}
+
+	var out, errBuf bytes.Buffer
+	// Only offline checks: no registry request for acme-internal-xyz, and the
+	// config finding is dropped.
+	if code := cli.Run(append(base, "--only", "malicious,typosquat"), &out, &errBuf); code != 0 {
+		t.Fatalf("exit=%d out=%s err=%s", code, out.String(), errBuf.String())
+	}
+	if !strings.Contains(out.String(), `"checks": [
+    "malicious",
+    "typosquat"
+  ]`) {
+		t.Fatalf("checks not reported: %s", out.String())
+	}
+
+	out.Reset()
+	errBuf.Reset()
+	if code := cli.Run(append(base, "--only", "registry_config", "--no-unclaimed"), &out, &errBuf); code != 2 ||
+		!strings.Contains(errBuf.String(), "--only cannot be combined") {
+		t.Fatalf("conflict: exit=%d err=%s", code, errBuf.String())
+	}
+
+	errBuf.Reset()
+	if code := cli.Run(append(base, "--only", "nope"), &out, &errBuf); code != 2 ||
+		!strings.Contains(errBuf.String(), `invalid --only "nope"`) {
+		t.Fatalf("invalid: exit=%d err=%s", code, errBuf.String())
+	}
+}
+
+func TestOnlyCleanMessageNamesChecks(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "package.json"), `{"dependencies": {"lodash": "4.17.21"}}`)
+	for only, want := range map[string]string{
+		"typosquat":                           "✓ No typosquats found.",
+		"typosquat,registry_config":           "✓ No typosquats or risky registry settings found.",
+		"malicious,typosquat,shadow_registry": "✓ No known malicious packages, typosquats, or unexpected package sources found.",
+	} {
+		var out, errBuf bytes.Buffer
+		if code := cli.Run([]string{root, "--only", only, "--no-marketing", "--color", "never"}, &out, &errBuf); code != 0 {
+			t.Fatalf("%s: exit=%d err=%s", only, code, errBuf.String())
+		}
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("%s: missing %q in:\n%s", only, want, out.String())
+		}
+	}
+}

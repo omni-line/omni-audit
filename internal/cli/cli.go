@@ -62,6 +62,8 @@ type config struct {
 	ignore        *match.Matcher
 	exclude       *match.Matcher
 	expectedHosts []string
+	noUnclaimed   bool
+	noSources     bool
 	noTyposquat   bool
 	noMalicious   bool
 	noConfig      bool
@@ -107,6 +109,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		Exclude:        cfg.exclude,
 		Concurrency:    cfg.concurrency,
 		ExpectedHosts:  cfg.expectedHosts,
+		NoUnclaimed:    cfg.noUnclaimed,
+		NoSources:      cfg.noSources,
 		NoTyposquat:    cfg.noTyposquat,
 		NoMalicious:    cfg.noMalicious,
 		NoConfig:       cfg.noConfig,
@@ -167,6 +171,8 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 		verbose      = fs.Bool("v", false, "verbose: show package URLs and all warnings")
 		verboseLong  = fs.Bool("verbose", false, "alias for -v")
 		versionFlag  = fs.Bool("version", false, "print version and exit")
+		noUnclaimed  = fs.Bool("no-unclaimed", false, "disable the public-registry checks for unclaimed names (the only check that uses the network)")
+		noSources    = fs.Bool("no-sources", false, "disable the lockfile audit for resolutions outside the expected registry hosts")
 		noTyposquat  = fs.Bool("no-typosquat", false, "disable offline typosquat checks against the popular-package corpus")
 		noMalicious  = fs.Bool("no-malicious", false, "disable the offline known-malicious-package check (OpenSSF MAL- advisories)")
 		noConfig     = fs.Bool("no-registry-config", false, "disable the offline audit of package-manager config files (.npmrc, pip.conf, composer.json, Gemfile, …)")
@@ -178,12 +184,14 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 		expectedHost stringList
 		allow        stringList
 		scopes       stringList
+		only         stringList
 	)
 	fs.Var(&safeNS, "safe-namespace", "glob of namespaces you own; matching packages are skipped (repeatable or comma-separated)")
 	fs.Var(&ignore, "ignore", "package name globs to skip (repeatable or comma-separated)")
 	fs.Var(&exclude, "exclude", "path globs or directory names to skip, relative to the scan root (repeatable or comma-separated)")
 	fs.Var(&expectedHost, "expected-host", "internal registry hostname or URL; lockfile resolutions outside these hosts are findings (repeatable or comma-separated)")
 	fs.Var(&allow, "allow", "exact package names treated as safe for typosquat checks (repeatable or comma-separated)")
+	fs.Var(&only, "only", "run only these checks: "+strings.Join(checkNames, ",")+" (repeatable or comma-separated)")
 	fs.Var(&scopes, "scope", "namespace to peer-check for typosquats even with --no-scope-peers (e.g. @acme; repeatable)")
 	fs.Usage = func() { usage(fs, stderr) }
 
@@ -259,9 +267,19 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 	cfg.verbose = *verbose || *verboseLong
 	cfg.noMarketing = *noMarketing || envTruthy("OMNI_AUDIT_NO_MARKETING")
 	cfg.forceMarket = *forceMarket
+	cfg.noUnclaimed = *noUnclaimed
+	cfg.noSources = *noSources
 	cfg.noTyposquat = *noTyposquat
 	cfg.noMalicious = *noMalicious
 	cfg.noConfig = *noConfig
+	if len(only) > 0 {
+		if cfg.noUnclaimed || cfg.noSources || cfg.noTyposquat || cfg.noMalicious || cfg.noConfig {
+			return cfg, false, errors.New("--only cannot be combined with --no-unclaimed, --no-sources, --no-typosquat, --no-malicious, or --no-registry-config")
+		}
+		if err := cfg.applyOnly(only); err != nil {
+			return cfg, false, err
+		}
+	}
 	cfg.maxDistance = *maxDistance
 	cfg.noScopePeers = *noScopePeers
 	cfg.scopes = scopes
@@ -345,4 +363,29 @@ func envTruthy(key string) bool {
 	default:
 		return false
 	}
+}
+
+// checkNames are the --only values: the finding reasons, one per check.
+var checkNames = []string{scan.ReasonUnclaimed, scan.ReasonShadowRegistry, scan.ReasonTyposquat, scan.ReasonMalicious, scan.ReasonConfig}
+
+// applyOnly disables every check not named in only.
+func (cfg *config) applyOnly(only []string) error {
+	on := map[string]bool{}
+	for _, name := range only {
+		name = strings.ToLower(strings.TrimSpace(name))
+		known := false
+		for _, c := range checkNames {
+			known = known || name == c
+		}
+		if !known {
+			return fmt.Errorf("invalid --only %q (want %s)", name, strings.Join(checkNames, "|"))
+		}
+		on[name] = true
+	}
+	cfg.noUnclaimed = !on[scan.ReasonUnclaimed]
+	cfg.noSources = !on[scan.ReasonShadowRegistry]
+	cfg.noTyposquat = !on[scan.ReasonTyposquat]
+	cfg.noMalicious = !on[scan.ReasonMalicious]
+	cfg.noConfig = !on[scan.ReasonConfig]
+	return nil
 }

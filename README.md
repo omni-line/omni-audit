@@ -183,6 +183,9 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
 | `--allow` | Exact package names treated as safe for typosquat checks |
 | `--expected-host` | Internal registry hostname or URL; lockfile resolutions outside these hosts are findings (repeatable / comma-separated). Without this flag, only known public registry hosts are flagged. |
 | `--exclude` | Skip paths: directory/file names or globs relative to the scan root |
+| `--only` | Run only these checks: `unclaimed`, `shadow_registry`, `typosquat`, `malicious`, `registry_config` (repeatable / comma-separated; the same names as `reason`). `--only malicious,typosquat,registry_config` makes no network requests |
+| `--no-unclaimed` | Disable the public-registry checks for unclaimed names (the only check that uses the network) |
+| `--no-sources` | Disable the lockfile audit for resolutions outside the expected registry hosts (lockfiles are still read for the malicious-package check) |
 | `--no-typosquat` | Disable offline typosquat checks |
 | `--no-malicious` | Disable the offline known-malicious-package check |
 | `--no-registry-config` | Disable the offline audit of package-manager config files |
@@ -239,6 +242,39 @@ Environment:
 - `FORCE_COLOR=1` — enable colors when not a TTY
 
 JSON includes an optional top-level `sponsor` object by default. Use `--no-marketing` or `-q` for a silent machine payload.
+
+## GitHub Action
+
+```yaml
+- uses: actions/checkout@v4
+- uses: omni-line/omni-audit@v0.10.0
+  with:
+    args: --safe-namespace '@your-org/*' --strict
+```
+
+The action downloads the release binary for the runner (Linux, macOS, or
+Windows; x64 or arm64), verifies it against `checksums.txt`, and runs it. It
+fails the step on findings, like the CLI.
+
+| Input | Default | Description |
+| --- | --- | --- |
+| `path` | `.` | Directory or manifest to scan |
+| `args` | | Extra flags, parsed like a shell command line |
+| `version` | the action's tag | Release to run; the latest release when the action is used at a branch or SHA |
+| `sarif` | `false` | Write SARIF to `sarif-file` instead of text to the log |
+| `sarif-file` | `omni-audit.sarif` | SARIF output path |
+
+Outputs: `exit-code` and `sarif-file`. For GitHub code scanning:
+
+```yaml
+- uses: omni-line/omni-audit@v0.10.0
+  with:
+    sarif: true
+    args: --fail-on none
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: omni-audit.sarif
+```
 
 ## CI example
 

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `--only` runs just the named checks (`unclaimed`, `shadow_registry`,
+  `typosquat`, `malicious`, `registry_config`; the same names as `reason`).
+  `--only malicious,typosquat,registry_config` scans fully offline
+- `--no-unclaimed` (skip the public-registry checks, the only network step) and
+  `--no-sources` (skip shadow-registry findings; lockfiles are still checked for
+  malicious versions)
+- `checks` in JSON lists the checks that ran; the text clean message names only
+  those checks
+- GitHub Action (`uses: omni-line/omni-audit@<tag>`): installs the release
+  binary for the runner after verifying `checksums.txt`, runs the scan, and can
+  write SARIF for code scanning
+
+### Changed
+
+- Dependabot keeps `github.com/omni-line/mal-check` (the malicious-package
+  data) and the SHA-pinned workflow actions up to date weekly
+
 ## [0.9.1] — 2026-10-22
 
 ### Fixed

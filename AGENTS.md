@@ -40,6 +40,7 @@ Requires Go **1.20+** (CI tests 1.20 and 1.22; releases use latest stable). Do n
 | `internal/report` | Text/JSON/SARIF output, exit codes, colors, marketing |
 | `internal/match` | Glob allowlists |
 | `scripts/update-corpus` | Offline corpus refresh tool (not used at scan time) |
+| `action.yml` | Composite GitHub Action: installs a verified release binary and runs it |
 | `testdata/` | Fixtures |
 
 Keep new code under `internal/` unless intentionally publishing a library API.

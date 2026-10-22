@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # github.com/omni-line/mal-check carries the malicious-package database;
+  # each of its releases is a data refresh for omni-audit.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+
+  # Workflow actions are pinned by SHA; keep the pins current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
