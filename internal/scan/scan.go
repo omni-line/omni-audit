@@ -130,7 +130,9 @@ type Stats struct {
 type Result struct {
 	Findings []Finding `json:"findings"`
 	Warnings []Warning `json:"warnings,omitempty"`
-	Stats    Stats     `json:"stats"`
+	// Checks lists the checks that ran, as finding reasons.
+	Checks []string `json:"checks,omitempty"`
+	Stats  Stats    `json:"stats"`
 }
 
 // Complete reports whether every discovered manifest and package was verified.
@@ -152,6 +154,12 @@ type Options struct {
 	// Lockfiles overrides the default lockfile kinds; nil means lockfile.Default().
 	// An empty non-nil slice disables lockfile source auditing.
 	Lockfiles []lockfile.Kind
+	// NoUnclaimed disables the public-registry existence checks, so the scan
+	// makes no network requests.
+	NoUnclaimed bool
+	// NoSources disables shadow-registry findings for lockfile resolutions.
+	// Lockfiles are still read for the malicious-package check.
+	NoSources bool
 	// NoTyposquat disables offline popular-package / scope-peer typosquat checks.
 	NoTyposquat bool
 	// NoMalicious disables the offline known-malicious-package check.
@@ -262,7 +270,7 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 		return nil, err
 	}
 
-	res := &Result{Findings: []Finding{}}
+	res := &Result{Findings: []Finding{}, Checks: enabledChecks(opts)}
 	res.Stats.Manifests = len(walk.Manifests)
 	for _, p := range walk.Problems {
 		res.Warnings = append(res.Warnings, Warning{Kind: WarnWalk, Manifest: p.Path, Message: p.Err.Error()})
@@ -308,6 +316,9 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 		}
 	}
 	res.Stats.UniquePackages = len(ordered)
+	if opts.NoUnclaimed {
+		ordered, nsOrdered = nil, nil // every check stays Unknown and unreported
+	}
 
 	runChecks(ctx, ordered, opts.Concurrency)
 	runNamespaceChecks(ctx, nsOrdered, opts.Concurrency)
@@ -395,6 +406,26 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 	return res, ctx.Err()
 }
 
+// enabledChecks lists the checks opts leaves on, in report order.
+func enabledChecks(opts Options) []string {
+	var out []string
+	for _, c := range []struct {
+		reason string
+		off    bool
+	}{
+		{ReasonMalicious, opts.NoMalicious},
+		{ReasonUnclaimed, opts.NoUnclaimed},
+		{ReasonTyposquat, opts.NoTyposquat},
+		{ReasonShadowRegistry, opts.NoSources},
+		{ReasonConfig, opts.NoConfig},
+	} {
+		if !c.off {
+			out = append(out, c.reason)
+		}
+	}
+	return out
+}
+
 func parse(eco *ecosystem.Ecosystem, m discover.Manifest) ([]manifest.Dependency, error) {
 	data, err := manifest.ReadFile(m.Path)
 	if err != nil {
@@ -452,6 +483,9 @@ func auditLockfiles(root string, opts Options, res *Result) []lockedDep {
 				continue
 			}
 			locked = append(locked, lockedDep{ecosystem: m.Ecosystem, name: d.Name, version: d.Version, manifest: m.Path, line: d.Line})
+			if opts.NoSources {
+				continue
+			}
 			host, _, bad := lockfile.Violation(d.URL, opts.ExpectedHosts)
 			if !bad {
 				continue

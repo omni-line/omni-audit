@@ -44,7 +44,7 @@ func writeText(stdout, stderr io.Writer, res *scan.Result, opts Options) {
 		case !res.Complete():
 			fmt.Fprintln(stdout, c.BoldYellow("! No findings, but the scan is incomplete (see warnings)."))
 		default:
-			fmt.Fprintln(stdout, c.BoldGreen("✓ No known malicious packages, unclaimed names, typosquats, unexpected package sources, or risky registry settings found."))
+			fmt.Fprintln(stdout, c.BoldGreen("✓ "+cleanMessage(res.Checks)))
 		}
 	}
 
@@ -383,4 +383,36 @@ func colorFooter(c Palette, unclaimed, shadow, typosquat, malicious, config int)
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// checkNouns names what each check looks for, for the clean message.
+var checkNouns = map[string]string{
+	scan.ReasonMalicious:      "known malicious packages",
+	scan.ReasonUnclaimed:      "unclaimed names",
+	scan.ReasonTyposquat:      "typosquats",
+	scan.ReasonShadowRegistry: "unexpected package sources",
+	scan.ReasonConfig:         "risky registry settings",
+}
+
+// cleanMessage says which checks found nothing, e.g. "No typosquats or
+// risky registry settings found." A nil checks list means every check ran.
+func cleanMessage(checks []string) string {
+	if checks == nil {
+		checks = []string{scan.ReasonMalicious, scan.ReasonUnclaimed, scan.ReasonTyposquat, scan.ReasonShadowRegistry, scan.ReasonConfig}
+	}
+	var nouns []string
+	for _, c := range checks {
+		if n, ok := checkNouns[c]; ok {
+			nouns = append(nouns, n)
+		}
+	}
+	switch len(nouns) {
+	case 0:
+		return "No checks ran."
+	case 1:
+		return "No " + nouns[0] + " found."
+	case 2:
+		return "No " + nouns[0] + " or " + nouns[1] + " found."
+	}
+	return "No " + strings.Join(nouns[:len(nouns)-1], ", ") + ", or " + nouns[len(nouns)-1] + " found."
 }

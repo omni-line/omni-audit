@@ -17,6 +17,7 @@ type JSONDocument struct {
 	SchemaVersion int            `json:"schema_version"`
 	Version       string         `json:"version"`
 	Complete      bool           `json:"complete"`
+	Checks        []string       `json:"checks,omitempty"`
 	Findings      []scan.Finding `json:"findings"`
 	Warnings      []scan.Warning `json:"warnings,omitempty"`
 	Stats         scan.Stats     `json:"stats"`
@@ -28,6 +29,7 @@ func writeJSON(w io.Writer, res *scan.Result, opts Options) error {
 		SchemaVersion: SchemaVersion,
 		Version:       opts.Version,
 		Complete:      res.Complete(),
+		Checks:        res.Checks,
 		Findings:      res.Findings,
 		Warnings:      res.Warnings,
 		Stats:         res.Stats,
