@@ -256,6 +256,10 @@ func (s *typoScanner) checkPeers(decls []typoDecl) {
 				if !ok || d == 0 {
 					continue
 				}
+				// Two popular packages are both real (laravel/sail, laravel/pail).
+				if set.Contains(a) && set.Contains(b) {
+					continue
+				}
 				typo, good := pickTypo(a, aLeaf, b, bLeaf, set)
 				h := hits[typo]
 				if h == nil || d < h.dist {

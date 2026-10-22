@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Scope-peer typosquat check no longer reports one popular package as a typo of
+  another in the same namespace (`laravel/sail` vs `laravel/pail`)
+
 ## [0.9.0] — 2026-10-22
 
 ### Added

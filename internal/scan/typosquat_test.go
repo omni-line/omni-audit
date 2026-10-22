@@ -82,7 +82,7 @@ func TestClassicTypos(t *testing.T) {
 			t.Errorf("%s: missing detail: %+v", pkg, f)
 		}
 	}
-	for _, exact := range []string{"lodash", "requests", "@acme/auth", "urllib3", "monolog/monolog", "serde", "rails", "nginx", "openssl"} {
+	for _, exact := range []string{"lodash", "requests", "@acme/auth", "urllib3", "monolog/monolog", "laravel/sail", "laravel/pail", "serde", "rails", "nginx", "openssl"} {
 		if _, ok := got[exact]; ok {
 			t.Errorf("exact package %q should not be a finding", exact)
 		}
