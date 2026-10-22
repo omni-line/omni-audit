@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binary for the runner after verifying `checksums.txt`, runs the scan, and can
   write SARIF for code scanning
 
+### Changed
+
+- Dependabot keeps `github.com/omni-line/mal-check` (the malicious-package
+  data) and the SHA-pinned workflow actions up to date weekly
+
 ## [0.9.1] — 2026-10-22
 
 ### Fixed
