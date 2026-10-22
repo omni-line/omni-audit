@@ -1,0 +1,9 @@
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      PIP_EXTRA_INDEX_URL: https://pypi.acme.corp/simple
+    steps:
+      - run: pip install -r requirements.txt

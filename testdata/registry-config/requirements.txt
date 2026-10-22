@@ -1,0 +1,2 @@
+--extra-index-url https://deploy:not-a-real-password@pypi.acme.corp/simple
+requests==2.32.3

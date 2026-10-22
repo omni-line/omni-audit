@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/omni-line/omni-audit/internal/regconfig"
 	"github.com/omni-line/omni-audit/internal/report"
 	"github.com/omni-line/omni-audit/internal/scan"
 )
@@ -59,7 +60,7 @@ func TestTextIncludesMarketing(t *testing.T) {
 		"omniline.app/docs",
 		"Kept clean",
 		"safe place for your supply chain",
-		"✓ No known malicious packages, unclaimed names, typosquats, or unexpected package sources found.",
+		"✓ No known malicious packages, unclaimed names, typosquats, unexpected package sources, or risky registry settings found.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
@@ -468,11 +469,75 @@ func TestMaliciousFindingSARIF(t *testing.T) {
 	for _, r := range run.Tool.Driver.Rules {
 		rules = append(rules, r.ID)
 	}
-	if fmt.Sprint(rules) != "[OA001 OA002 OA003 OA004]" {
+	if fmt.Sprint(rules) != "[OA001 OA002 OA003 OA004 OA005]" {
 		t.Fatalf("rules = %v", rules)
 	}
 	r := run.Results[0]
 	if r.RuleID != "OA004" || r.Level != "error" || r.Properties["ids"] != "MAL-2025-191265" || r.Properties["campaign"] != "shai-hulud" {
 		t.Fatalf("result = %+v", r)
+	}
+}
+
+func configFinding() *scan.Result {
+	return &scan.Result{
+		Findings: []scan.Finding{{
+			Ecosystem:   "pypi",
+			Package:     "--extra-index-url",
+			Manifest:    "Dockerfile",
+			Line:        3,
+			Group:       regconfig.RiskExtraIndex,
+			Kind:        regconfig.RiskExtraIndex,
+			Reason:      scan.ReasonConfig,
+			Severity:    scan.SeverityHigh,
+			Remediation: regconfig.Remediation(regconfig.RiskExtraIndex),
+			Message:     "install command uses --extra-index-url: pip queries every index",
+		}},
+		Stats: scan.Stats{Manifests: 0, ConfigFiles: 1, Findings: 1},
+	}
+}
+
+func TestConfigFindingText(t *testing.T) {
+	out, _ := write(t, configFinding(), report.Options{Verbose: true, ForceMarket: true})
+	for _, want := range []string{
+		"✗ 1 risky registry setting found",
+		"Dockerfile:3",
+		"extra_index",
+		"registry_config",
+		"↳ install command uses --extra-index-url",
+		"let a public package replace an internal one",
+		regconfig.Remediation(regconfig.RiskExtraIndex),
+		"1 config file",
+		"Extra indexes, non-canonical repositories",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestConfigFindingSARIF(t *testing.T) {
+	out, _ := write(t, configFinding(), report.Options{Format: report.FormatSARIF})
+	var doc struct {
+		Runs []struct {
+			Results []struct {
+				RuleID     string                `json:"ruleId"`
+				Message    struct{ Text string } `json:"message"`
+				Properties map[string]string     `json:"properties"`
+			} `json:"results"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatal(err)
+	}
+	r := doc.Runs[0].Results[0]
+	if r.RuleID != "OA005" || r.Properties["kind"] != regconfig.RiskExtraIndex ||
+		!strings.HasPrefix(r.Message.Text, `pypi setting "--extra-index-url": install command uses`) {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestFooterMixedConfig(t *testing.T) {
+	if got := report.FooterText(1, 0, 0, 0, 1); !strings.Contains(got, "Unclaimed names, typosquats") {
+		t.Fatalf("mixed footer = %q", got)
 	}
 }

@@ -1,0 +1,11 @@
+[project]
+name = "acme-app"
+version = "0.1.0"
+dependencies = ["requests>=2"]
+
+[tool.uv]
+index-strategy = "unsafe-best-match" # pick the highest version anywhere
+
+[[tool.uv.index]]
+name = "acme"
+url = "http://pypi.acme.corp/simple"

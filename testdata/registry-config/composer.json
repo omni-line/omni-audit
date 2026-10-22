@@ -1,0 +1,10 @@
+{
+    "name": "acme/app",
+    "repositories": [
+        {"type": "composer", "url": "https://repo.acme.corp", "canonical": false},
+        {"type": "vcs", "url": "http://git.acme.corp/acme/tools.git"}
+    ],
+    "config": {
+        "secure-http": false
+    }
+}

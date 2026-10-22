@@ -4,7 +4,7 @@
 [![CI](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml/badge.svg)](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml)
 [![Powered by Omni Line](https://img.shields.io/badge/Powered%20by-Omni%20Line-FF4B4B?style=flat)](https://omniline.app/)
 
-**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion**, **typosquatting**, **known malicious packages**, and **shadow registry** risk. It discovers NPM, Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub manifests, checks whether each declared name exists on the public registry, and reports names that are still **unclaimed**. It compares names to an embedded popular-package corpus for 1–2-edit near-misses, checks names and locked versions against the OpenSSF malicious-packages database, and audits lockfile resolution URLs that pull from public registries instead of your internal proxy.
+**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion**, **typosquatting**, **known malicious packages**, **shadow registry** risk, and **risky registry settings**. It discovers NPM, Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub manifests, checks whether each declared name exists on the public registry, and reports names that are still **unclaimed**. It compares names to an embedded popular-package corpus for 1–2-edit near-misses, checks names and locked versions against the OpenSSF malicious-packages database, audits lockfile resolution URLs that pull from public registries instead of your internal proxy, and audits package-manager config files (`.npmrc`, `pip.conf`, `composer.json`, `Gemfile`, Dockerfiles, CI pipelines, …) for settings that let a public package replace an internal one.
 
 Distributed as a **standalone Go binary**. No Node or PHP runtime required.
 
@@ -17,6 +17,8 @@ Attackers also publish packages whose names look like popular libraries (`react-
 Some packages need no typo at all: they were published as malware outright, or a legitimate package (`nx`, `chalk`, `axios`) shipped malicious releases from a hijacked maintainer account. Omni Audit checks every declared name and locked version against the 239k OpenSSF malicious-packages (`MAL-`) advisories, offline, using the database from [mal-check](https://github.com/omni-line/mal-check).
 
 Separately, developers often bypass the company registry proxy — a misconfigured `.npmrc`, or a lockfile copied from outside the org — so installs hit `registry.npmjs.org` / `pypi.org` directly and skip your security perimeter. Omni Audit flags those lockfile resolutions too.
+
+Often the cause is one line of configuration. `pip install --extra-index-url` asks every index and installs the **highest version** it finds, so a public upload of your internal name with version `99.0` wins; that is how the 2022 `torchtriton` compromise reached PyTorch nightly users. Composer repositories marked `"canonical": false`, a Gemfile with two global `source` lines, and uv's `unsafe-best-match` index strategy open the same door. Omni Audit flags those settings, plus registry tokens committed in plain text and registries reached over plain HTTP, offline.
 
 Auditing is the first step. [Omni Line](https://omniline.app) is the durable fix: a self-hosted registry with Virtual Registries that route internal and external packages through one URL.
 
@@ -138,11 +140,25 @@ https://omniline.app  ·  docs: https://omniline.app/docs
 5. Reports names that return **404** as `reason=unclaimed`; checks that fail are warnings, never treated as clean
 6. Compares each declared name to an embedded popular-package corpus (and to namespace peers) and reports 1–2-edit near-misses as `reason=typosquat` — offline, no network
 7. Walks supported lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `poetry.lock`, `composer.lock`), extracts resolution URLs, and flags known public registry hosts (or any host outside `--expected-host`) as `reason=shadow_registry` — offline, no network
-8. Checks every lockfile resolution and every declared dependency against an embedded snapshot of [OpenSSF malicious-packages](https://github.com/ossf/malicious-packages) (`MAL-` advisories, via [mal-check](https://github.com/omni-line/mal-check)'s `pkg/maldb`) and reports matches as `reason=malicious`: `critical` when the locked version (or every version) is malware, `high` when only some versions are and the declaration is not pinned. Lockfile versions win over manifest ranges; clean versions of once-hijacked packages are not reported — offline, no network
+8. Audits package-manager configuration files and reports risky settings as `reason=registry_config`, with the risk in `kind` (offline, no network; table below)
+9. Checks every lockfile resolution and every declared dependency against an embedded snapshot of [OpenSSF malicious-packages](https://github.com/ossf/malicious-packages) (`MAL-` advisories, via [mal-check](https://github.com/omni-line/mal-check)'s `pkg/maldb`) and reports matches as `reason=malicious`: `critical` when the locked version (or every version) is malware, `high` when only some versions are and the declaration is not pinned. Lockfile versions win over manifest ranges; clean versions of once-hijacked packages are not reported — offline, no network
+
+#### Registry configuration checks
+
+| `kind` | Severity | Flagged in |
+| --- | --- | --- |
+| `extra_index` | high | `--extra-index-url` / `extra-index-url` / `PIP_EXTRA_INDEX_URL` in `pip.conf`, `pip.ini`, requirements and constraints files, Dockerfiles, CI pipelines (`.github/workflows`, `.gitlab-ci.yml`, CircleCI, Bitbucket, Azure, `Jenkinsfile`), `Makefile`, `*.sh`; `install_search_all_sources = true` in a `Pipfile`. `uv pip install --extra-index-url` is not flagged: uv's default `first-index` strategy is not affected |
+| `unsafe_index_strategy` | high | uv `index-strategy = "unsafe-…"` in `pyproject.toml` / `uv.toml`, `--index-strategy unsafe-…`, `UV_INDEX_STRATEGY=unsafe-…` |
+| `non_canonical_repository` | high | `composer.json` repositories with `"canonical": false` |
+| `multiple_global_sources` | high | a `Gemfile` / `gems.rb` with more than one global `source` (block sources are fine) |
+| `plaintext_credential` | high | literal tokens and passwords in `.npmrc`, `.yarnrc.yml`, Composer `auth.json`, `.cargo/config.toml` / `credentials.toml`, Maven `settings.xml`, and registry URLs (`https://user:pass@…`). `${VAR}` references, Maven-encrypted `{…}` passwords, and files excluded by a `.gitignore` are not flagged |
+| `insecure_transport` | medium | plain-HTTP registry URLs (loopback hosts excepted), `strict-ssl=false`, `enableStrictSsl: false`, `unsafeHttpWhitelist`, `--trusted-host`, `verify_ssl = false`, `"secure-http": false` |
+
+Secret values are never printed or written to JSON/SARIF; URLs are redacted (`https://deploy:xxxxx@…`). Go has no file-level equivalent (`GOPRIVATE` lives in the environment), so it is not covered.
 
 ### Security properties
 
-- Only package names are sent, and only to the public registries above (HTTPS, TLS 1.2+, no HTTPS→HTTP redirects). Names that are not valid for the registry are never sent. Lockfile source auditing, typosquat, and malicious-package checks are offline (no network).
+- Only package names are sent, and only to the public registries above (HTTPS, TLS 1.2+, no HTTPS→HTTP redirects). Names that are not valid for the registry are never sent. Lockfile source auditing, typosquat, malicious-package, and registry configuration checks are offline (no network).
 - Manifests and lockfiles are read with a 10 MiB cap; FIFOs/devices and symlinks that resolve outside the scan root are skipped.
 - Values from scanned files are escaped before being printed, so a crafted manifest cannot inject terminal escape sequences.
 - `HTTPS_PROXY` / `NO_PROXY` are honored for locked-down networks.
@@ -169,6 +185,7 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
 | `--exclude` | Skip paths: directory/file names or globs relative to the scan root |
 | `--no-typosquat` | Disable offline typosquat checks |
 | `--no-malicious` | Disable the offline known-malicious-package check |
+| `--no-registry-config` | Disable the offline audit of package-manager config files |
 | `--distance` | Maximum edit distance for typosquat matches (`1` or `2`, default `2`) |
 | `--scope` | Namespace to peer-check for typosquats (e.g. `@acme`; repeatable) |
 | `--no-scope-peers` | Disable automatic namespace peer typosquat checks |
@@ -213,7 +230,7 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
 }
 ```
 
-`complete` is `false` when any warning was raised (see `warnings[]`, each with a `kind` of `walk`, `manifest`, `registry`, or `namespace`). New fields may be added; breaking changes bump `schema_version`.
+`complete` is `false` when any warning was raised (see `warnings[]`, each with a `kind` of `walk`, `manifest`, `registry`, `namespace`, `lockfile`, or `config`). New fields may be added; breaking changes bump `schema_version`.
 
 Environment:
 
@@ -246,7 +263,7 @@ Run from the repository root so SARIF paths are repository-relative.
 
 ## Roadmap
 
-- `.npmrc` / `auth.json` / `pip.conf` / `GOPRIVATE` config-file policy analysis
+- Scope-aware `.npmrc` policy (internal `@scope` without a `@scope:registry` mapping)
 - Optional Omni Line registry URL to verify private existence
 - Poetry/`Pipfile` table-style dependency maps (requirements + PEP 621 covered today)
 - Gradle manifests, `conanfile.py`, and non-Hub OCI registries (GHCR, Quay, ECR)

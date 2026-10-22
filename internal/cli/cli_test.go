@@ -151,3 +151,24 @@ func TestMaliciousCheckAndOptOut(t *testing.T) {
 		t.Fatalf("--no-malicious: exit=%d out=%s err=%s", code, out.String(), errBuf.String())
 	}
 }
+
+func TestRegistryConfigAuditAndOptOut(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, ".npmrc"), "//npm.acme.corp/:_authToken=not-a-real-token\n")
+	base := []string{root, "--format", "json", "--no-marketing"}
+
+	var out, errBuf bytes.Buffer
+	if code := cli.Run(base, &out, &errBuf); code != 1 {
+		t.Fatalf("exit=%d, want 1; err=%s", code, errBuf.String())
+	}
+	if !strings.Contains(out.String(), `"reason": "registry_config"`) || !strings.Contains(out.String(), `"kind": "plaintext_credential"`) ||
+		strings.Contains(out.String(), "not-a-real-token") {
+		t.Fatalf("expected a redacted registry_config finding: %s", out.String())
+	}
+
+	out.Reset()
+	errBuf.Reset()
+	if code := cli.Run(append(base, "--no-registry-config"), &out, &errBuf); code != 0 {
+		t.Fatalf("--no-registry-config: exit=%d out=%s err=%s", code, out.String(), errBuf.String())
+	}
+}

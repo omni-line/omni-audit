@@ -1,0 +1,6 @@
+source "https://rubygems.org"
+source "https://gems.acme.corp"
+
+source "https://gems.acme.corp" do
+  gem "acme-internal"
+end

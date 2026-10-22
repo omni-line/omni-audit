@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-**Omni Audit** (`omni-audit`) is a Go CLI that detects dependency-confusion risk for **NPM**, **Composer**, **PyPI**, **Go**, **Cargo**, **RubyGems**, **Maven**, **Conan**, and **Docker Hub** by flagging package names that are unclaimed on public registries; audits lockfile resolution URLs for unexpected / public registry hosts (shadow registries); checks names and locked versions against the OpenSSF malicious-packages database (via `github.com/omni-line/mal-check/pkg/maldb`); and compares declared names to an embedded popular-package corpus for typosquats. It is an open-source project backed by [Omni Line](https://omniline.app).
+**Omni Audit** (`omni-audit`) is a Go CLI that detects dependency-confusion risk for **NPM**, **Composer**, **PyPI**, **Go**, **Cargo**, **RubyGems**, **Maven**, **Conan**, and **Docker Hub** by flagging package names that are unclaimed on public registries; audits lockfile resolution URLs for unexpected / public registry hosts (shadow registries); checks names and locked versions against the OpenSSF malicious-packages database (via `github.com/omni-line/mal-check/pkg/maldb`); compares declared names to an embedded popular-package corpus for typosquats; and audits package-manager config files (`.npmrc`, `pip.conf`, `composer.json`, `Gemfile`, Dockerfiles, CI pipelines, …) for extra indexes, non-canonical repositories, plaintext credentials, and plain HTTP. It is an open-source project backed by [Omni Line](https://omniline.app).
 
 Module: `github.com/omni-line/omni-audit` · Binary: `cmd/omni-audit` → `omni-audit`
 
@@ -32,10 +32,11 @@ Requires Go **1.20+** (CI tests 1.20 and 1.22; releases use latest stable). Do n
 | `internal/discover` | Manifest walk (ecosystem-agnostic) |
 | `internal/manifest` | Shared `Dependency`, safe `ReadFile`; parsers per ecosystem |
 | `internal/lockfile` | Lockfile parsers + host policy for source / shadow-registry audit |
+| `internal/regconfig` | Package-manager config file checks (risky registry settings), one file per ecosystem |
 | `internal/distance` | OSA edit distance + typosquat technique classification |
 | `internal/corpus` | Embedded popular-package snapshots for typosquat checks |
 | `internal/registry` | `Checker`, shared HTTP `Prober` / `Fetch`; clients per ecosystem |
-| `internal/scan` | Orchestration, check dedupe, worker pool, lockfile + typosquat + malicious-package audits |
+| `internal/scan` | Orchestration, check dedupe, worker pool, lockfile + typosquat + malicious-package + registry-config audits |
 | `internal/report` | Text/JSON/SARIF output, exit codes, colors, marketing |
 | `internal/match` | Glob allowlists |
 | `scripts/update-corpus` | Offline corpus refresh tool (not used at scan time) |
@@ -56,11 +57,12 @@ ecosystem-specific branches to `discover`, `scan`, or `report`.
 - Skip `node_modules`, `vendor`, `target`, `.bundle`, `.venv`, `venv`, `__pycache__`, `.git`, `dist`, `build` when discovering manifests.
 - Tests: unit tests with `httptest` for registries; no live network required in `go test` (typosquat uses the embedded corpus).
 - Typosquat scans are offline; do not download corpora at scan time. Refresh with `make corpus`.
+- Registry config checks (`internal/regconfig`) are offline and must never copy a secret value into an `Issue`; URLs go through `lockfile.RedactURL`. Credentials in files a `.gitignore` excludes are not reported.
 - Malicious-package checks (`internal/scan/malicious.go`) are offline against `maldb.Default()`. Fresher data comes from bumping `github.com/omni-line/mal-check` in `go.mod`, never from a download at scan time.
 
 ## Out of scope (unless asked)
 
-Poetry/`Pipfile` table maps, `.npmrc`/`pip.conf`/`GOPRIVATE` config-file analysis, Omni Line API integration, Gradle manifests, `conanfile.py` AST parsing, multi-registry OCI (GHCR/Quay/ECR), keyboard-adjacency typosquat models, or cutting release tags without an explicit request.
+Poetry/`Pipfile` table maps, `GOPRIVATE` (environment-level) checks, Omni Line API integration, Gradle manifests, `conanfile.py` AST parsing, multi-registry OCI (GHCR/Quay/ECR), keyboard-adjacency typosquat models, or cutting release tags without an explicit request.
 
 ## Docs
 

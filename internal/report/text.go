@@ -27,24 +27,24 @@ func writeText(stdout, stderr io.Writer, res *scan.Result, opts Options) {
 		fmt.Fprintln(mw)
 	}
 
-	unclaimed, shadow, typosquat, malicious := splitFindings(res.Findings)
+	unclaimed, shadow, typosquat, malicious, config := splitFindings(res.Findings)
 	if len(res.Findings) > 0 {
 		if !opts.Quiet {
-			writeFindingHeadlines(stdout, c, unclaimed, shadow, typosquat, malicious)
+			writeFindingHeadlines(stdout, c, unclaimed, shadow, typosquat, malicious, config)
 			fmt.Fprintln(stdout)
 		}
 		writeFindingsTable(stdout, c, res.Findings, opts.Verbose)
 		if !opts.Quiet {
-			writeGuidance(stdout, c, unclaimed, shadow, typosquat, malicious)
+			writeGuidance(stdout, c, unclaimed, shadow, typosquat, malicious, config)
 		}
 	} else if !opts.Quiet {
 		switch {
-		case res.Stats.Manifests == 0 && res.Stats.Lockfiles == 0:
+		case res.Stats.Manifests == 0 && res.Stats.Lockfiles == 0 && res.Stats.ConfigFiles == 0:
 			fmt.Fprintln(stdout, c.BoldYellow("! No supported dependency manifests or lockfiles found."))
 		case !res.Complete():
 			fmt.Fprintln(stdout, c.BoldYellow("! No findings, but the scan is incomplete (see warnings)."))
 		default:
-			fmt.Fprintln(stdout, c.BoldGreen("✓ No known malicious packages, unclaimed names, typosquats, or unexpected package sources found."))
+			fmt.Fprintln(stdout, c.BoldGreen("✓ No known malicious packages, unclaimed names, typosquats, unexpected package sources, or risky registry settings found."))
 		}
 	}
 
@@ -64,11 +64,11 @@ func writeText(stdout, stderr io.Writer, res *scan.Result, opts Options) {
 
 	if showMarketing {
 		fmt.Fprintln(mw)
-		fmt.Fprintln(mw, colorFooter(mc, len(unclaimed), len(shadow), len(typosquat), len(malicious)))
+		fmt.Fprintln(mw, colorFooter(mc, len(unclaimed), len(shadow), len(typosquat), len(malicious), len(config)))
 	}
 }
 
-func writeFindingHeadlines(w io.Writer, c Palette, unclaimed, shadow, typosquat, malicious []scan.Finding) {
+func writeFindingHeadlines(w io.Writer, c Palette, unclaimed, shadow, typosquat, malicious, config []scan.Finding) {
 	if len(malicious) > 0 {
 		fmt.Fprintln(w, c.BoldRed(fmt.Sprintf("✗ %s found", plural(len(malicious), "known malicious package", "known malicious packages"))))
 	}
@@ -81,6 +81,9 @@ func writeFindingHeadlines(w io.Writer, c Palette, unclaimed, shadow, typosquat,
 	if len(shadow) > 0 {
 		fmt.Fprintln(w, c.BoldRed(fmt.Sprintf("✗ Audit failed: %s resolving outside your expected registry proxy",
 			plural(len(shadow), "dependency", "dependencies"))))
+	}
+	if len(config) > 0 {
+		fmt.Fprintln(w, c.BoldRed(fmt.Sprintf("✗ %s found", plural(len(config), "risky registry setting", "risky registry settings"))))
 	}
 }
 
@@ -166,7 +169,7 @@ func writeFindingsTable(w io.Writer, c Palette, findings []scan.Finding, verbose
 			if f.ResolvedURL != "" {
 				u = f.ResolvedURL
 			}
-			if (f.Reason == scan.ReasonTyposquat || f.Reason == scan.ReasonMalicious) && f.Message != "" {
+			if (f.Reason == scan.ReasonTyposquat || f.Reason == scan.ReasonMalicious || f.Reason == scan.ReasonConfig) && f.Message != "" {
 				fmt.Fprintf(w, "  %s %s\n", c.Dim("↳"), c.Dim(clean(f.Message)))
 			}
 			if u != "" {
@@ -179,7 +182,7 @@ func writeFindingsTable(w io.Writer, c Palette, findings []scan.Finding, verbose
 	}
 }
 
-func writeGuidance(w io.Writer, c Palette, unclaimed, shadow, typosquat, malicious []scan.Finding) {
+func writeGuidance(w io.Writer, c Palette, unclaimed, shadow, typosquat, malicious, config []scan.Finding) {
 	if len(malicious) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "These packages were published to a public registry as malware (OpenSSF MAL-")
@@ -200,6 +203,11 @@ func writeGuidance(w io.Writer, c Palette, unclaimed, shadow, typosquat, malicio
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "These installs bypass your internal registry proxy and its security controls.")
 		fmt.Fprintln(w, "Lockfiles that embed public registry URLs pull directly from the internet.")
+	}
+	if len(config) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "These package-manager settings let a public package replace an internal one,")
+		fmt.Fprintln(w, "expose a registry credential, or fetch packages without verified TLS.")
 	}
 
 	type advice struct{ eco, text string }
@@ -228,6 +236,9 @@ func writeGuidance(w io.Writer, c Palette, unclaimed, shadow, typosquat, malicio
 	}
 	if len(shadow) > 0 {
 		add("sources", scan.RemediationShadow)
+	}
+	for _, f := range config {
+		add(f.Kind, f.Remediation)
 	}
 	if len(tips) == 0 {
 		return
@@ -275,6 +286,9 @@ func summaryLine(s scan.Stats) string {
 	}
 	if s.Lockfiles > 0 || s.ResolvedPackages > 0 {
 		parts[0] += " · " + plural(s.Lockfiles, "lockfile", "lockfiles")
+	}
+	if s.ConfigFiles > 0 {
+		parts[0] += " · " + plural(s.ConfigFiles, "config file", "config files")
 	}
 	parts = append(parts,
 		packages,
@@ -328,7 +342,7 @@ func severityStyle(c Palette) func(string) string {
 	}
 }
 
-func splitFindings(findings []scan.Finding) (unclaimed, shadow, typosquat, malicious []scan.Finding) {
+func splitFindings(findings []scan.Finding) (unclaimed, shadow, typosquat, malicious, config []scan.Finding) {
 	for _, f := range findings {
 		switch f.Reason {
 		case scan.ReasonShadowRegistry:
@@ -337,21 +351,23 @@ func splitFindings(findings []scan.Finding) (unclaimed, shadow, typosquat, malic
 			typosquat = append(typosquat, f)
 		case scan.ReasonMalicious:
 			malicious = append(malicious, f)
+		case scan.ReasonConfig:
+			config = append(config, f)
 		default:
 			unclaimed = append(unclaimed, f)
 		}
 	}
-	return unclaimed, shadow, typosquat, malicious
+	return unclaimed, shadow, typosquat, malicious, config
 }
 
-func colorFooter(c Palette, unclaimed, shadow, typosquat, malicious int) string {
-	plain := FooterText(unclaimed, shadow, typosquat, malicious)
+func colorFooter(c Palette, unclaimed, shadow, typosquat, malicious, config int) string {
+	plain := FooterText(unclaimed, shadow, typosquat, malicious, config)
 	if !c.Enabled() {
 		return plain
 	}
 	lines := strings.Split(plain, "\n")
 	out := make([]string, 0, len(lines))
-	findingCount := unclaimed + shadow + typosquat + malicious
+	findingCount := unclaimed + shadow + typosquat + malicious + config
 	for i, line := range lines {
 		switch {
 		case i == 0 && strings.HasPrefix(line, "───"):

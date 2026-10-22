@@ -1,0 +1,3 @@
+[registries.acme]
+index = "sparse+http://cargo.acme.corp/index/"
+token = "not-a-real-token"
