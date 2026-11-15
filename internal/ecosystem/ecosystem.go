@@ -9,6 +9,7 @@ package ecosystem
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/omni-line/omni-audit/internal/manifest"
 	"github.com/omni-line/omni-audit/internal/registry"
@@ -120,6 +121,26 @@ func Default(p *registry.Prober) []Ecosystem {
 		Conan(conancenter.New(p)),
 		Docker(dockerhub.New(p)),
 	}
+}
+
+// Lookup returns the ecosystem with the given name.
+func Lookup(ecosystems []Ecosystem, name string) (Ecosystem, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	for _, e := range ecosystems {
+		if e.Name == name {
+			return e, true
+		}
+	}
+	return Ecosystem{}, false
+}
+
+// NameList joins ecosystem names for error messages ("npm|composer|...").
+func NameList(ecosystems []Ecosystem) string {
+	parts := make([]string, len(ecosystems))
+	for i, e := range ecosystems {
+		parts[i] = e.Name
+	}
+	return strings.Join(parts, "|")
 }
 
 // ValidateAll checks a set of ecosystems for missing fields and duplicate names.

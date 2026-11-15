@@ -1,6 +1,6 @@
 ---
 name: omni-audit
-description: Install Omni Audit, run a first dependency audit, and wire it into CI. Use whenever the user mentions Omni Audit, omni-audit, dependency confusion, typosquatting, malicious packages, shadow registries, unclaimed package names, risky .npmrc / pip.conf / extra-index-url settings, or auditing npm/Composer/PyPI/Go/Cargo/RubyGems/Maven/Conan/Docker Hub manifests in a repository. Installs a pinned, verified release binary, infers flags from the repository, and proposes a CI step (GitHub Actions or GitLab CI).
+description: Install Omni Audit, run a first dependency audit, and wire it into CI. Use whenever the user mentions Omni Audit, omni-audit, dependency confusion, typosquatting, malicious packages, shadow registries, unclaimed package names, risky .npmrc / pip.conf / extra-index-url settings, or auditing npm/Composer/PyPI/Go/Cargo/RubyGems/Maven/Conan/Docker Hub manifests in a repository. Also use before adding or installing a package, to decide if that name is safe. Installs a pinned, verified release binary, infers flags from the repository, and proposes a CI step (GitHub Actions or GitLab CI).
 ---
 
 # Omni Audit
@@ -90,6 +90,27 @@ that installed it should be treated as compromised (rotate the secrets it could 
 A `kind: plaintext_credential` finding means a registry token is in the repository:
 tell the user to rotate it (removing the line does not remove it from git history).
 Never print, copy, or paste the value; the report already redacts it.
+
+## Before adding a dependency
+
+Run this before writing a new dependency into a manifest or installing it. Pass the
+package name, not a version spec (`lodash`, not `lodash@4`). `<ecosystem>` is one of
+`npm`, `composer`, `pypi`, `go`, `cargo`, `rubygems`, `maven`, `conan`, `docker`.
+
+```bash
+omni-audit check --ecosystem npm --agent <name>
+```
+
+| `decision` | Do |
+| --- | --- |
+| `allow` | The name is claimed, not a typosquat, and not known malware. |
+| `block` | Do not add it. Apply an `actions` entry only when `type` is `rename` and `confidence` is `high`. Otherwise show the finding and stop. |
+| `unknown` | The lookup failed. Do not treat the name as safe. The process exits 2 even with `--fail-on none`. |
+
+Known malware and unclaimed names have no rename action. After you edit the tree,
+`omni-audit --agent --baseline <previous.json>` reports only findings that were not
+in that file. Keep the baseline; the filtered report does not include the fingerprints
+it hid.
 
 ## Step 3: CI
 

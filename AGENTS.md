@@ -27,7 +27,7 @@ Requires Go **1.20+** (CI tests 1.20 and 1.22; releases use latest stable). Do n
 | Path | Role |
 | --- | --- |
 | `cmd/omni-audit` | Entrypoint only |
-| `internal/cli` | Flags, validation, signals |
+| `internal/cli` | Flags, validation, signals. `check` looks up names without a tree walk |
 | `internal/ecosystem` | Registers ecosystems (manifest detection + parser + registry checker) |
 | `internal/discover` | Manifest walk (ecosystem-agnostic) |
 | `internal/manifest` | Shared `Dependency`, safe `ReadFile`; parsers per ecosystem |
@@ -52,7 +52,8 @@ ecosystem-specific branches to `discover`, `scan`, or `report`.
 - **DCO:** commits should be signed off (`git commit -s`).
 - **Marketing copy** lives only in `internal/report/marketing.go` — align with Omni Line docs (`https://omniline.app/docs`): self-hosted multi-ecosystem registry, “one UI, one API, your infrastructure.”
 - **Colors** live in `internal/report/color.go`; respect `--color`, `NO_COLOR`, `FORCE_COLOR`.
-- Exit codes: `0` clean, `1` findings, `2` error (or incomplete scan with `--strict`). Do not break JSON schema fields used by CI (`findings`, `stats`, `sponsor`); new fields are additive, breaking changes bump `schema_version`.
+- Exit codes: `0` clean, `1` findings, `2` error (or incomplete scan with `--strict`, or a failed `check` lookup). Do not break JSON schema fields used by CI (`findings`, `stats`, `sponsor`); new fields are additive, breaking changes bump `schema_version`.
+- `check` and `--agent` add `decision` and `actions`. JSON findings include `id` and `fingerprint`. `--baseline` hides fingerprints from a previous report. A rename action is only emitted for one suggestion at distance 1.
 - Registry HTTP goes through `registry.Prober` (HEAD, retries, redirect policy). Validate names before any request.
 - Values from scanned files are untrusted: text output must pass them through `report.clean`.
 - Skip `node_modules`, `vendor`, `target`, `.bundle`, `.venv`, `venv`, `__pycache__`, `.git`, `dist`, `build` when discovering manifests.

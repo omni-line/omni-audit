@@ -48,6 +48,8 @@ type Options struct {
 	StdoutIsTTY bool
 	StderrIsTTY bool
 	Color       ColorMode
+	// Compact writes JSON on one line. Set by --agent.
+	Compact bool
 }
 
 // Policy decides the exit code for a result.
@@ -57,8 +59,11 @@ type Policy struct {
 	// Strict exits 2 when the scan is incomplete and nothing else failed.
 	Strict bool
 	// MinSeverity is the lowest finding severity that fails the build
-	// (low|high|critical). Empty means low (any finding).
+	// (low|medium|high|critical). Empty means low (any finding).
 	MinSeverity string
+	// UnknownFails exits 2 when the result is incomplete and nothing was
+	// found. `check` sets this so a failed registry lookup is not a clean name.
+	UnknownFails bool
 }
 
 // Write renders res to stdout (and warnings/marketing to stderr as needed).
@@ -83,33 +88,15 @@ func ExitCode(res *scan.Result, p Policy) int {
 	switch {
 	case res == nil:
 		return ExitError
-	case p.FailOnFindings && hasFindingAtLeast(res, p.MinSeverity):
+	case p.FailOnFindings && scan.HasSeverity(res, p.MinSeverity):
 		return ExitFindings
+	case p.UnknownFails && !res.Complete():
+		return ExitError
 	case p.Strict && !res.Complete():
 		return ExitError
 	default:
 		return ExitOK
 	}
-}
-
-func hasFindingAtLeast(res *scan.Result, min string) bool {
-	if res == nil || len(res.Findings) == 0 {
-		return false
-	}
-	if min == "" {
-		min = scan.SeverityLow
-	}
-	threshold := scan.SeverityRank(min)
-	for _, f := range res.Findings {
-		sev := f.Severity
-		if sev == "" {
-			sev = scan.SeverityHigh
-		}
-		if scan.SeverityRank(sev) >= threshold {
-			return true
-		}
-	}
-	return false
 }
 
 func shouldShowMarketing(opts Options) bool {

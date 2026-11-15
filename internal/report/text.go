@@ -39,13 +39,20 @@ func writeText(stdout, stderr io.Writer, res *scan.Result, opts Options) {
 		}
 	} else if !opts.Quiet {
 		switch {
-		case res.Stats.Manifests == 0 && res.Stats.Lockfiles == 0 && res.Stats.ConfigFiles == 0:
+		case res.Stats.Manifests == 0 && res.Stats.Lockfiles == 0 && res.Stats.ConfigFiles == 0 && res.Stats.Packages == 0:
 			fmt.Fprintln(stdout, c.BoldYellow("! No supported dependency manifests or lockfiles found."))
 		case !res.Complete():
-			fmt.Fprintln(stdout, c.BoldYellow("! No findings, but the scan is incomplete (see warnings)."))
+			if nameCheck(res) {
+				fmt.Fprintln(stdout, c.BoldYellow("! No findings, but the registry lookup did not finish (see warnings)."))
+			} else {
+				fmt.Fprintln(stdout, c.BoldYellow("! No findings, but the scan is incomplete (see warnings)."))
+			}
 		default:
 			fmt.Fprintln(stdout, c.BoldGreen("✓ "+cleanMessage(res.Checks)))
 		}
+	}
+	if res.Decision != "" && !opts.Quiet {
+		fmt.Fprintln(stdout, decisionLine(c, res.Decision))
 	}
 
 	if opts.Quiet {
@@ -111,6 +118,9 @@ func writeFindingsTable(w io.Writer, c Palette, findings []scan.Finding, verbose
 		loc := f.Manifest
 		if f.Line > 0 {
 			loc += ":" + strconv.Itoa(f.Line)
+		}
+		if loc == "" {
+			loc = "-"
 		}
 		sev := f.Severity
 		if sev == "" {
@@ -276,10 +286,34 @@ func writeWarnings(w io.Writer, c Palette, warnings []scan.Warning, verbose bool
 	}
 }
 
+func nameCheck(res *scan.Result) bool {
+	return res.Stats.Manifests == 0 && res.Stats.Lockfiles == 0 && res.Stats.Packages > 0
+}
+
+func decisionLine(c Palette, decision string) string {
+	switch decision {
+	case scan.DecisionBlock:
+		return c.BoldRed("decision: block")
+	case scan.DecisionUnknown:
+		return c.BoldYellow("decision: unknown")
+	default:
+		return c.BoldGreen("decision: allow")
+	}
+}
+
 func summaryLine(s scan.Stats) string {
 	packages := plural(s.Packages, "package", "packages")
 	if s.UniquePackages > 0 && s.UniquePackages != s.Packages {
 		packages += fmt.Sprintf(" (%d unique)", s.UniquePackages)
+	}
+	if s.Manifests == 0 && s.Lockfiles == 0 && s.ResolvedPackages == 0 && s.Packages > 0 {
+		parts := []string{
+			"Checked " + packages,
+			plural(s.Findings, "finding", "findings"),
+			fmt.Sprintf("%d skipped", s.Skipped),
+			plural(s.Errors, "error", "errors"),
+		}
+		return joinSummary(parts, s)
 	}
 	parts := []string{
 		"Scanned " + plural(s.Manifests, "manifest", "manifests"),
@@ -305,6 +339,13 @@ func summaryLine(s scan.Stats) string {
 			fmt.Sprintf("%d skipped", s.Skipped),
 			plural(s.Errors, "error", "errors"),
 		}
+	}
+	return joinSummary(parts, s)
+}
+
+func joinSummary(parts []string, s scan.Stats) string {
+	if s.Suppressed > 0 {
+		parts = append(parts, fmt.Sprintf("%d suppressed", s.Suppressed))
 	}
 	line := strings.Join(parts, " · ")
 	if s.DurationMS > 0 {

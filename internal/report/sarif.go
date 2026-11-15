@@ -1,13 +1,9 @@
 package report
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/omni-line/omni-audit/internal/scan"
@@ -18,11 +14,11 @@ import (
 
 const (
 	sarifSchema        = "https://json.schemastore.org/sarif-2.1.0.json"
-	sarifRuleUnclaimed = "OA001"
-	sarifRuleShadow    = "OA002"
-	sarifRuleTyposquat = "OA003"
-	sarifRuleMalicious = "OA004"
-	sarifRuleRegConfig = "OA005"
+	sarifRuleUnclaimed = scan.RuleUnclaimed
+	sarifRuleShadow    = scan.RuleShadowRegistry
+	sarifRuleTyposquat = scan.RuleTyposquat
+	sarifRuleMalicious = scan.RuleMalicious
+	sarifRuleRegConfig = scan.RuleConfig
 	toolInfoURI        = "https://github.com/omni-line/omni-audit"
 	fingerprintK       = "omniAudit/v1"
 )
@@ -279,24 +275,20 @@ func invocation(res *scan.Result) sarifInvocation {
 }
 
 func sarifFinding(f scan.Finding) sarifResult {
-	uri := sarifURI(f.Manifest)
-	ruleID := sarifRuleUnclaimed
+	uri := scan.ReportPath(f.Manifest)
+	ruleID := scan.RuleID(f.Reason)
 	msg := fmt.Sprintf("%s package %q is not registered on %s. Anyone can publish it.", f.Ecosystem, f.Package, registryLabel(f))
 	switch f.Reason {
 	case scan.ReasonShadowRegistry:
-		ruleID = sarifRuleShadow
 		msg = fmt.Sprintf("%s package %q resolves from %s instead of your expected registry proxy.", f.Ecosystem, f.Package, registryLabel(f))
 		if f.ResolvedURL != "" {
 			msg += " Resolved URL: " + f.ResolvedURL + "."
 		}
 	case scan.ReasonMalicious:
-		ruleID = sarifRuleMalicious
 		msg = f.Message + "."
 	case scan.ReasonConfig:
-		ruleID = sarifRuleRegConfig
 		msg = fmt.Sprintf("%s setting %q: %s.", f.Ecosystem, f.Package, f.Message)
 	case scan.ReasonTyposquat:
-		ruleID = sarifRuleTyposquat
 		switch {
 		case f.Message != "":
 			msg = f.Message + "."
@@ -313,14 +305,6 @@ func sarifFinding(f scan.Finding) sarifResult {
 	if f.Line > 0 {
 		loc.PhysicalLocation.Region = &sarifRegion{StartLine: f.Line}
 	}
-	fp := f.Ecosystem + "\x00" + f.Package + "\x00" + uri + "\x00" + f.Reason
-	if f.ResolvedURL != "" {
-		fp += "\x00" + f.ResolvedURL
-	}
-	if f.Kind != "" {
-		fp += "\x00" + f.Kind
-	}
-	sum := sha256.Sum256([]byte(fp))
 	props := map[string]string{"ecosystem": f.Ecosystem, "package": f.Package, "reason": f.Reason}
 	if f.Version != "" {
 		props["version"] = f.Version
@@ -364,7 +348,7 @@ func sarifFinding(f scan.Finding) sarifResult {
 		Level:               level,
 		Message:             sarifText{Text: msg},
 		Locations:           []sarifLocation{loc},
-		PartialFingerprints: map[string]string{fingerprintK: hex.EncodeToString(sum[:16])},
+		PartialFingerprints: map[string]string{fingerprintK: scan.Fingerprint(f)},
 		Properties:          props,
 	}
 }
@@ -387,17 +371,4 @@ func registryLabel(f scan.Finding) string {
 		return f.Registry
 	}
 	return "the public registry"
-}
-
-// sarifURI returns a slash-separated path, relative to the working directory
-// when possible, as code-scanning uploads expect repository-relative URIs.
-func sarifURI(p string) string {
-	if filepath.IsAbs(p) {
-		if wd, err := os.Getwd(); err == nil {
-			if rel, err := filepath.Rel(wd, p); err == nil && !strings.HasPrefix(rel, "..") {
-				p = rel
-			}
-		}
-	}
-	return strings.TrimPrefix(filepath.ToSlash(filepath.Clean(p)), "./")
 }

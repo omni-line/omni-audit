@@ -65,11 +65,26 @@ const RemediationShadow = "Point the package manager at your internal registry p
 // DefaultConcurrency is used when Options.Concurrency is not positive.
 const DefaultConcurrency = 16
 
+// SARIF rule identifiers. Stable across JSON (`id`) and SARIF (`ruleId`).
+const (
+	RuleUnclaimed      = "OA001"
+	RuleShadowRegistry = "OA002"
+	RuleTyposquat      = "OA003"
+	RuleMalicious      = "OA004"
+	RuleConfig         = "OA005"
+)
+
 // Finding is a reportable audit risk (unclaimed name, unexpected source, or typosquat).
 //
 // ecosystem, package, version, manifest, and reason are part of the stable
 // JSON schema; other fields are additive.
 type Finding struct {
+	// ID is the stable rule identifier (OA001, OA002, OA003). Report output
+	// fills it; scanners leave it empty.
+	ID string `json:"id,omitempty"`
+	// Fingerprint is a stable identity for baseline suppression. Report output
+	// fills it; scanners leave it empty.
+	Fingerprint     string   `json:"fingerprint,omitempty"`
 	Ecosystem       string   `json:"ecosystem"`
 	Package         string   `json:"package"`
 	Version         string   `json:"version,omitempty"`
@@ -122,12 +137,16 @@ type Stats struct {
 	// Skipped counts declarations matched by --ignore or --safe-namespace.
 	Skipped int `json:"skipped"`
 	// Errors counts warnings (unreadable paths, bad manifests, failed checks).
-	Errors     int   `json:"errors"`
+	Errors int `json:"errors"`
+	// Suppressed counts findings hidden by --baseline.
+	Suppressed int   `json:"suppressed,omitempty"`
 	DurationMS int64 `json:"duration_ms"`
 }
 
 // Result is the full scan outcome.
 type Result struct {
+	// Decision is allow, block, or unknown. Set for `check` and `--agent`.
+	Decision string    `json:"decision,omitempty"`
 	Findings []Finding `json:"findings"`
 	Warnings []Warning `json:"warnings,omitempty"`
 	// Checks lists the checks that ran, as finding reasons.
@@ -323,66 +342,9 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 	runChecks(ctx, ordered, opts.Concurrency)
 	runNamespaceChecks(ctx, nsOrdered, opts.Concurrency)
 
-	for _, o := range occs {
-		if checks[o.key].status != registry.NotFound {
-			continue
-		}
-		f := Finding{
-			Ecosystem:   o.eco.Name,
-			Package:     o.dep.Name,
-			Version:     o.dep.Version,
-			Manifest:    o.manifest,
-			Line:        o.dep.Line,
-			Group:       o.dep.Group,
-			Reason:      ReasonUnclaimed,
-			Severity:    SeverityHigh,
-			Registry:    o.eco.Registry,
-			URL:         lockfile.RedactURL(o.eco.URL(o.dep.Name)),
-			Remediation: o.eco.Remediation,
-		}
-		if o.eco.Namespace != nil && o.eco.NamespaceChecker != nil {
-			if ns, ok := o.eco.Namespace(o.dep.Name); ok {
-				f.Namespace = ns
-				nc := nsChecks[nsKey{o.eco.Name, ns}]
-				switch {
-				case nc == nil || nc.status == registry.Unknown:
-					f.NamespaceStatus = NamespaceUnknown
-					f.Severity = SeverityHigh
-				case nc.status == registry.NotFound:
-					f.NamespaceStatus = NamespaceUnclaimed
-					f.Severity = SeverityCritical
-				case nc.status == registry.Exists:
-					f.NamespaceStatus = NamespaceClaimed
-					f.Severity = SeverityLow
-				}
-			}
-		}
-		res.Findings = append(res.Findings, f)
-	}
-	for _, c := range ordered {
-		if c.status != registry.Unknown {
-			continue
-		}
-		msg := "registry check failed"
-		if c.err != nil {
-			msg = c.err.Error()
-		}
-		res.Warnings = append(res.Warnings, Warning{
-			Kind: WarnRegistry, Ecosystem: c.eco.Name, Package: c.name, Manifest: c.manifest, Message: msg,
-		})
-	}
-	for _, nc := range nsOrdered {
-		if nc.status != registry.Unknown {
-			continue
-		}
-		msg := "namespace ownership check failed; severity kept at high"
-		if nc.err != nil {
-			msg = nc.err.Error()
-		}
-		res.Warnings = append(res.Warnings, Warning{
-			Kind: WarnNamespace, Ecosystem: nc.eco.Name, Package: nc.ns, Message: msg,
-		})
-	}
+	addUnclaimed(res, occs, checks, nsChecks)
+	addRegistryWarnings(res, ordered)
+	addNamespaceWarnings(res, nsOrdered)
 
 	locked := auditLockfiles(root, opts, res)
 	auditConfig(root, opts, res)
@@ -398,12 +360,90 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 	}
 	res.Findings = append(supersedeUnclaimed(res.Findings, mal), mal...)
 
+	finish(res, start)
+	return res, ctx.Err()
+}
+
+func addUnclaimed(res *Result, occs []occurrence, checks map[checkKey]*check, nsChecks map[nsKey]*nsCheck) {
+	for _, o := range occs {
+		c := checks[o.key]
+		if c == nil || c.status != registry.NotFound {
+			continue
+		}
+		res.Findings = append(res.Findings, unclaimedFinding(o, nsChecks))
+	}
+}
+
+func unclaimedFinding(o occurrence, nsChecks map[nsKey]*nsCheck) Finding {
+	f := Finding{
+		Ecosystem:   o.eco.Name,
+		Package:     o.dep.Name,
+		Version:     o.dep.Version,
+		Manifest:    o.manifest,
+		Line:        o.dep.Line,
+		Group:       o.dep.Group,
+		Reason:      ReasonUnclaimed,
+		Severity:    SeverityHigh,
+		Registry:    o.eco.Registry,
+		URL:         lockfile.RedactURL(o.eco.URL(o.dep.Name)),
+		Remediation: o.eco.Remediation,
+	}
+	if o.eco.Namespace != nil && o.eco.NamespaceChecker != nil {
+		if ns, ok := o.eco.Namespace(o.dep.Name); ok {
+			f.Namespace = ns
+			nc := nsChecks[nsKey{o.eco.Name, ns}]
+			switch {
+			case nc == nil || nc.status == registry.Unknown:
+				f.NamespaceStatus = NamespaceUnknown
+				f.Severity = SeverityHigh
+			case nc.status == registry.NotFound:
+				f.NamespaceStatus = NamespaceUnclaimed
+				f.Severity = SeverityCritical
+			case nc.status == registry.Exists:
+				f.NamespaceStatus = NamespaceClaimed
+				f.Severity = SeverityLow
+			}
+		}
+	}
+	return f
+}
+
+func addRegistryWarnings(res *Result, ordered []*check) {
+	for _, c := range ordered {
+		if c.status != registry.Unknown {
+			continue
+		}
+		msg := "registry check failed"
+		if c.err != nil {
+			msg = c.err.Error()
+		}
+		res.Warnings = append(res.Warnings, Warning{
+			Kind: WarnRegistry, Ecosystem: c.eco.Name, Package: c.name, Manifest: c.manifest, Message: msg,
+		})
+	}
+}
+
+func addNamespaceWarnings(res *Result, ordered []*nsCheck) {
+	for _, nc := range ordered {
+		if nc.status != registry.Unknown {
+			continue
+		}
+		msg := "namespace ownership check failed; severity kept at high"
+		if nc.err != nil {
+			msg = nc.err.Error()
+		}
+		res.Warnings = append(res.Warnings, Warning{
+			Kind: WarnNamespace, Ecosystem: nc.eco.Name, Package: nc.ns, Message: msg,
+		})
+	}
+}
+
+func finish(res *Result, start time.Time) {
 	sortFindings(res.Findings)
 	sortWarnings(res.Warnings)
 	res.Stats.Findings = len(res.Findings)
 	res.Stats.Errors = len(res.Warnings)
 	res.Stats.DurationMS = time.Since(start).Milliseconds()
-	return res, ctx.Err()
 }
 
 // enabledChecks lists the checks opts leaves on, in report order.

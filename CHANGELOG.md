@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-11-15
+
+### Added
+
+- `omni-audit check --ecosystem <name> <package>` looks up proposed names without walking a tree. It reports unclaimed names, typosquats, and known malicious packages. JSON includes `decision` (`allow`, `block`, `unknown`) and `actions` (a `rename` when a typosquat has one suggestion at distance 1). A failed registry lookup exits 2 so an unknown name is not treated as safe
+- `--agent` writes compact JSON without marketing and includes `decision` and `actions` for both `check` and a tree scan
+- JSON findings include `id` (`OA001`–`OA005`) and `fingerprint`. `--baseline` accepts a previous JSON report or `{"fingerprints":[...]}` and hides matching findings (`stats.suppressed`)
+- The agent skill documents `check`, `--agent`, and `--baseline` for deciding whether a name is safe to add
+
 ## [0.10.0] — 2026-10-22
 
 ### Added

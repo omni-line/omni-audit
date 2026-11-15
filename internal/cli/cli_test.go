@@ -84,7 +84,7 @@ func TestHelp(t *testing.T) {
 	if code := cli.Run([]string{"-h"}, &out, &errBuf); code != 0 {
 		t.Fatalf("help exit=%d", code)
 	}
-	for _, want := range []string{"Usage:", "-exclude", "-strict", "sarif"} {
+	for _, want := range []string{"Usage:", "-exclude", "-strict", "sarif", "check", "-agent", "-baseline"} {
 		if !strings.Contains(errBuf.String(), want) {
 			t.Fatalf("usage missing %q: %s", want, errBuf.String())
 		}
@@ -117,6 +117,71 @@ func TestMissingRoot(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	if code := cli.Run([]string{filepath.Join(t.TempDir(), "nope")}, &out, &errBuf); code != 2 {
 		t.Fatalf("exit=%d want 2", code)
+	}
+}
+
+func TestCheckUsageAndValidation(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	if code := cli.Run([]string{"check", "-h"}, &out, &errBuf); code != 0 {
+		t.Fatalf("help exit=%d", code)
+	}
+	if !strings.Contains(errBuf.String(), "--ecosystem") || !strings.Contains(errBuf.String(), "allow") {
+		t.Fatalf("check usage: %s", errBuf.String())
+	}
+
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"check"}, "--ecosystem"},
+		{[]string{"check", "--ecosystem", "npm"}, "package name"},
+		{[]string{"check", "--ecosystem", "nope", "lodash"}, "invalid --ecosystem"},
+		{[]string{"check", "--ecosystem", "npm", "not a name"}, "invalid package name"},
+		{[]string{"--agent", "--format", "sarif"}, "--agent writes JSON"},
+	}
+	for _, tc := range cases {
+		out.Reset()
+		errBuf.Reset()
+		if code := cli.Run(tc.args, &out, &errBuf); code != 2 {
+			t.Errorf("%v: exit=%d want 2 (%s)", tc.args, code, errBuf.String())
+		}
+		if !strings.Contains(errBuf.String(), tc.want) {
+			t.Errorf("%v: stderr %q missing %q", tc.args, errBuf.String(), tc.want)
+		}
+	}
+}
+
+func TestAgentOutput(t *testing.T) {
+	root := t.TempDir()
+	var out, errBuf bytes.Buffer
+	code := cli.Run([]string{root, "--agent"}, &out, &errBuf)
+	if code != 0 {
+		t.Fatalf("exit=%d err=%s", code, errBuf.String())
+	}
+	text := out.String()
+	if strings.Contains(text, "\n  ") || strings.Contains(text, "sponsor") {
+		t.Fatalf("expected compact JSON without sponsor:\n%s", text)
+	}
+	if !strings.Contains(text, `"decision":"allow"`) || !strings.Contains(text, `"actions":[]`) {
+		t.Fatalf("missing decision: %s", text)
+	}
+}
+
+func TestBaselineFile(t *testing.T) {
+	root := t.TempDir()
+	var out, errBuf bytes.Buffer
+	missing := filepath.Join(root, "missing.json")
+	if code := cli.Run([]string{root, "--baseline", missing, "--format", "json", "--no-marketing"}, &out, &errBuf); code != 2 {
+		t.Fatalf("missing baseline exit=%d", code)
+	}
+	base := filepath.Join(root, "baseline.json")
+	if err := os.WriteFile(base, []byte(`{"fingerprints":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errBuf.Reset()
+	if code := cli.Run([]string{root, "--baseline", base, "--agent"}, &out, &errBuf); code != 0 {
+		t.Fatalf("empty baseline exit=%d err=%s out=%s", code, errBuf.String(), out.String())
 	}
 }
 

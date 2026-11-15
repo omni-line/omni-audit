@@ -247,6 +247,9 @@ func TestJSONDocument(t *testing.T) {
 	if f.Line != 12 || f.Group != "devDependencies" || f.URL == "" || f.Reason != "unclaimed" {
 		t.Fatalf("finding: %+v", f)
 	}
+	if f.ID != scan.RuleUnclaimed || f.Fingerprint == "" || f.Fingerprint != scan.Fingerprint(oneFinding().Findings[0]) {
+		t.Fatalf("id/fingerprint: %+v", f)
+	}
 
 	// Stable fields used by CI must stay present.
 	var raw map[string]json.RawMessage
@@ -330,6 +333,14 @@ func TestSARIF(t *testing.T) {
 	if run.Invocations[0].ExecutionSuccessful || len(run.Invocations[0].Notifications) != 1 {
 		t.Fatalf("invocation: %+v", run.Invocations[0])
 	}
+	jsonOut, _ := write(t, oneFinding(), report.Options{Format: report.FormatJSON, NoMarketing: true})
+	var jsonDoc report.JSONDocument
+	if err := json.Unmarshal([]byte(jsonOut), &jsonDoc); err != nil {
+		t.Fatal(err)
+	}
+	if jsonDoc.Findings[0].Fingerprint != run.Results[0].PartialFingerprints["omniAudit/v1"] {
+		t.Fatalf("json fingerprint %s != sarif %v", jsonDoc.Findings[0].Fingerprint, run.Results[0].PartialFingerprints)
+	}
 }
 
 func TestSharpCTAOnFindings(t *testing.T) {
@@ -385,10 +396,43 @@ func TestExitCode(t *testing.T) {
 		{"min-severity filters low", &scan.Result{Findings: []scan.Finding{{Severity: scan.SeverityLow, Package: "x"}}}, report.Policy{FailOnFindings: true, MinSeverity: scan.SeverityHigh}, report.ExitOK},
 		{"min-severity keeps critical", &scan.Result{Findings: []scan.Finding{{Severity: scan.SeverityCritical, Package: "x"}}}, report.Policy{FailOnFindings: true, MinSeverity: scan.SeverityHigh}, report.ExitFindings},
 		{"nil", nil, report.Policy{}, report.ExitError},
+		{"unknown fails", incomplete, report.Policy{UnknownFails: true}, report.ExitError},
+		{"findings win over unknown", both, report.Policy{FailOnFindings: true, UnknownFails: true}, report.ExitFindings},
 	}
 	for _, tc := range cases {
 		if got := report.ExitCode(tc.res, tc.policy); got != tc.want {
 			t.Errorf("%s: exit=%d want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestAgentDecisionJSON(t *testing.T) {
+	res := &scan.Result{
+		Decision: scan.DecisionBlock,
+		Findings: []scan.Finding{{
+			Ecosystem:   "npm",
+			Package:     "crossenv",
+			Manifest:    "package.json",
+			Line:        4,
+			Reason:      scan.ReasonTyposquat,
+			Severity:    scan.SeverityCritical,
+			Distance:    1,
+			Suggestions: []string{"cross-env"},
+		}},
+	}
+	out, _ := write(t, res, report.Options{Format: report.FormatJSON, Compact: true, NoMarketing: true})
+	if strings.Contains(out, "\n  ") || strings.Contains(out, "sponsor") {
+		t.Fatalf("expected compact JSON:\n%s", out)
+	}
+	for _, want := range []string{
+		`"decision":"block"`,
+		`"id":"OA003"`,
+		`"type":"rename"`,
+		`"replacement":"cross-env"`,
+		`"confidence":"high"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %s in %s", want, out)
 		}
 	}
 }

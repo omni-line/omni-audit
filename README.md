@@ -77,6 +77,12 @@ omni-audit --format json --no-marketing
 # SARIF for GitHub code scanning / security dashboards
 omni-audit --format sarif > omni-audit.sarif
 
+# Ask whether a name is safe before adding it
+omni-audit check --ecosystem npm --agent crossenv
+
+# Compact JSON for an agent, ignoring findings already accepted
+omni-audit --agent --baseline .omni-audit-baseline.json
+
 # Skip names you own and fixture directories
 omni-audit --safe-namespace '@acme/*,acme/*' --exclude testdata,fixtures
 ```
@@ -169,7 +175,9 @@ Secret values are never printed or written to JSON/SARIF; URLs are redacted (`ht
 | --- | --- |
 | `0` | No findings (or `--fail-on none`) |
 | `1` | One or more findings at or above `--min-severity` (`--fail-on any`, default) |
-| `2` | Usage or runtime error, or an incomplete scan with `--strict` |
+| `2` | Usage or runtime error, an incomplete scan with `--strict`, or a failed `check` lookup |
+
+`check` uses the same codes: `0` allow, `1` block, `2` the registry lookup failed or the arguments are invalid. A failed lookup is never a clean name, including with `--fail-on none`.
 
 Without `--strict`, registry failures and unreadable manifests are reported as warnings and do not change the exit code. Use `--strict` in CI when an unverified package should block the pipeline. Use `--min-severity high` (or `critical`) to ignore low-severity scoped findings when the scope/vendor is already claimed.
 
@@ -178,6 +186,9 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
 | Flag | Description |
 | --- | --- |
 | `--format text\|json\|sarif` | Output format (default `text`) |
+| `--agent` | Compact JSON for agents: no marketing, plus `decision` (`allow` / `block` / `unknown`) and `actions`. Do not combine with `--format text` or `--format sarif` |
+| `--baseline` | Hide findings whose `fingerprint` appears in a previous JSON report, or in `{"fingerprints":[...]}`. The report lists only what remains; keep the baseline file |
+| `check --ecosystem` | With the `check` command: ecosystem of the names to look up (`npm`, `composer`, `pypi`, `go`, `cargo`, `rubygems`, `maven`, `conan`, `docker`) |
 | `--safe-namespace` | Globs for namespaces you own; matches are skipped (repeatable / comma-separated) |
 | `--ignore` | Skip package name globs |
 | `--allow` | Exact package names treated as safe for typosquat checks |
@@ -214,6 +225,8 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
   "complete": true,
   "findings": [
     {
+      "id": "OA001",
+      "fingerprint": "6a3565302a9133a7fc65b76b818a5d11",
       "ecosystem": "npm",
       "package": "@acme/internal-utils",
       "version": "1.0.0",
@@ -233,7 +246,46 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
 }
 ```
 
-`complete` is `false` when any warning was raised (see `warnings[]`, each with a `kind` of `walk`, `manifest`, `registry`, `namespace`, `lockfile`, or `config`). New fields may be added; breaking changes bump `schema_version`.
+`complete` is `false` when any warning was raised (see `warnings[]`, each with a `kind` of `walk`, `manifest`, `registry`, `namespace`, `lockfile`, or `config`). `checks` lists the checks that ran. `id` is the SARIF rule (`OA001` unclaimed, `OA002` shadow registry, `OA003` typosquat, `OA004` malicious, `OA005` registry config). `fingerprint` ignores the dependency version and line number, so `--baseline` still matches after a constraint bump in the same file. New fields may be added; breaking changes bump `schema_version`.
+
+### For agents
+
+`check` does not walk a tree. Pass the package name, not a version spec:
+
+```bash
+omni-audit check --ecosystem npm --agent crossenv
+```
+
+```json
+{
+  "schema_version": 1,
+  "decision": "block",
+  "findings": [
+    {
+      "id": "OA003",
+      "ecosystem": "npm",
+      "package": "crossenv",
+      "reason": "typosquat",
+      "severity": "critical",
+      "distance": 1,
+      "suggestions": ["cross-env"]
+    }
+  ],
+  "actions": [
+    {
+      "type": "rename",
+      "ecosystem": "npm",
+      "package": "crossenv",
+      "replacement": "cross-env",
+      "confidence": "high"
+    }
+  ]
+}
+```
+
+`decision` is `allow` (claimed, not a typosquat at or above `--min-severity`, and not known malware), `block` (act on the findings), or `unknown` (the lookup failed; do not add the name). A `rename` action is included only when a typosquat has one suggestion at edit distance 1. Unclaimed names and known malware have no rename: claim the name on the registry, or remove the package.
+
+`--agent` on a tree scan uses the same compact document. `--baseline .omni-audit-baseline.json` drops findings already listed in that report. `stats.suppressed` counts how many were hidden. The output contains only the findings that remain, so keep the baseline file instead of replacing it with the filtered report.
 
 Environment:
 

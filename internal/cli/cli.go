@@ -71,16 +71,26 @@ type config struct {
 	allow         map[string]struct{}
 	scopes        []string
 	noScopePeers  bool
+	agent         bool
+	compact       bool
+	baseline      string
+	check         bool
+	ecosystem     string
+	names         []string
 }
 
 // errHelp signals that usage was printed on request.
 var errHelp = errors.New("help requested")
 
 // Run executes the CLI and returns a process exit code. SIGINT and SIGTERM
-// cancel in-flight registry checks.
+// cancel in-flight registry checks. The first argument "check" selects name
+// checks (`omni-audit check --ecosystem npm <package>`).
 func Run(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if len(args) > 0 && args[0] == "check" {
+		return runCheck(ctx, args[1:], stdout, stderr)
+	}
 	return run(ctx, args, stdout, stderr)
 }
 
@@ -98,11 +108,35 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	ver := version.String()
+	prober := newProber(ver, cfg)
+	res, err := scan.Run(ctx, cfg.root, scanOptions(cfg, prober))
+	if err != nil {
+		return fail(stderr, err)
+	}
+	if err := prepare(res, cfg); err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return report.ExitError
+	}
+	if err := writeReport(stdout, stderr, res, ver, cfg); err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return report.ExitError
+	}
+	return report.ExitCode(res, report.Policy{
+		FailOnFindings: cfg.failAny,
+		Strict:         cfg.strict,
+		MinSeverity:    cfg.minSeverity,
+	})
+}
+
+func newProber(ver string, cfg config) *registry.Prober {
 	ua := fmt.Sprintf("omni-audit/%s (+https://github.com/omni-line/omni-audit)", ver)
 	prober := registry.NewProber(registry.NewHTTPClient(cfg.timeout, cfg.concurrency), ua)
 	prober.Retries = cfg.retries
+	return prober
+}
 
-	res, err := scan.Run(ctx, cfg.root, scan.Options{
+func scanOptions(cfg config, prober *registry.Prober) scan.Options {
+	return scan.Options{
 		Ecosystems:     ecosystem.Default(prober),
 		SafeNamespaces: cfg.safeNS,
 		Ignore:         cfg.ignore,
@@ -118,19 +152,27 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		Allow:          cfg.allow,
 		Scopes:         cfg.scopes,
 		NoScopePeers:   cfg.noScopePeers,
-	})
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			fmt.Fprintln(stderr, "error: interrupted")
-		} else {
-			fmt.Fprintf(stderr, "error: %v\n", err)
-		}
-		return report.ExitError
 	}
+}
 
+func prepare(res *scan.Result, cfg config) error {
+	if cfg.baseline != "" {
+		set, err := scan.LoadBaseline(cfg.baseline)
+		if err != nil {
+			return err
+		}
+		scan.ApplyBaseline(res, set)
+	}
+	if cfg.agent || cfg.check {
+		res.Decision = scan.Decide(res, cfg.minSeverity)
+	}
+	return nil
+}
+
+func writeReport(stdout, stderr io.Writer, res *scan.Result, ver string, cfg config) error {
 	stdoutFile, _ := stdout.(*os.File)
 	stderrFile, _ := stderr.(*os.File)
-	if err := report.Write(stdout, stderr, res, report.Options{
+	return report.Write(stdout, stderr, res, report.Options{
 		Format:      cfg.format,
 		Version:     ver,
 		Quiet:       cfg.quiet,
@@ -140,15 +182,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		StdoutIsTTY: report.IsTTY(stdoutFile),
 		StderrIsTTY: report.IsTTY(stderrFile),
 		Color:       cfg.color,
-	}); err != nil {
-		fmt.Fprintf(stderr, "error: %v\n", err)
-		return report.ExitError
-	}
-	return report.ExitCode(res, report.Policy{
-		FailOnFindings: cfg.failAny,
-		Strict:         cfg.strict,
-		MinSeverity:    cfg.minSeverity,
+		Compact:     cfg.compact,
 	})
+}
+
+func fail(stderr io.Writer, err error) int {
+	if errors.Is(err, context.Canceled) {
+		fmt.Fprintln(stderr, "error: interrupted")
+	} else {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+	}
+	return report.ExitError
 }
 
 func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err error) {
@@ -178,6 +222,8 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 		noConfig     = fs.Bool("no-registry-config", false, "disable the offline audit of package-manager config files (.npmrc, pip.conf, composer.json, Gemfile, …)")
 		maxDistance  = fs.Int("distance", scan.DefaultTyposquatDistance, "maximum edit distance for typosquat matches (1 or 2)")
 		noScopePeers = fs.Bool("no-scope-peers", false, "disable automatic namespace peer typosquat checks")
+		agent        = fs.Bool("agent", false, "compact JSON for agents: no marketing, with decision, actions, id, and fingerprint")
+		baseline     = fs.String("baseline", "", "hide findings whose fingerprint is in this JSON report or {\"fingerprints\":[...]}")
 		safeNS       stringList
 		ignore       stringList
 		exclude      stringList
@@ -283,17 +329,45 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 	cfg.maxDistance = *maxDistance
 	cfg.noScopePeers = *noScopePeers
 	cfg.scopes = scopes
+	cfg.baseline = strings.TrimSpace(*baseline)
 	if len(allow) > 0 {
 		cfg.allow = make(map[string]struct{}, len(allow))
 		for _, name := range allow {
 			cfg.allow[name] = struct{}{}
 		}
 	}
+	if err := applyAgent(fs, &cfg, *agent); err != nil {
+		return cfg, false, err
+	}
 	return cfg, false, nil
 }
 
+func applyAgent(fs *flag.FlagSet, cfg *config, agent bool) error {
+	if !agent {
+		return nil
+	}
+	formatSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "format" {
+			formatSet = true
+		}
+	})
+	if formatSet && cfg.format != report.FormatJSON {
+		return errors.New("--agent writes JSON; do not combine it with another --format")
+	}
+	cfg.agent = true
+	cfg.format = report.FormatJSON
+	cfg.compact = true
+	cfg.noMarketing = true
+	cfg.forceMarket = false
+	cfg.color = report.ColorNever
+	return nil
+}
+
 func usage(fs *flag.FlagSet, w io.Writer) {
-	fmt.Fprint(w, `Usage: omni-audit [path] [flags]
+	fmt.Fprint(w, `Usage:
+  omni-audit [path] [flags]
+  omni-audit check --ecosystem <name> <package> [package...] [flags]
 
 Scan a project tree (or a single manifest) for dependency confusion,
 typosquatted names, known malicious packages, unexpected lockfile package
@@ -304,6 +378,10 @@ advisories, checked offline), resolutions to public / non-proxy registries,
 and config that merges public and internal indexes, stores credentials in
 plain text, or disables TLS are reported as findings.
 
+check looks up proposed package names without walking a tree. Use it before
+adding a dependency. --agent prints a compact JSON decision (allow, block, or
+unknown) and a rename action when a typosquat is unambiguous.
+
 Flags:
 `)
 	fs.PrintDefaults()
@@ -311,7 +389,7 @@ Flags:
 Exit codes:
   0  no findings (or --fail-on none)
   1  findings reported
-  2  usage or runtime error, or an incomplete scan with --strict
+  2  usage or runtime error, an incomplete scan with --strict, or a failed check lookup
 
 Environment:
   OMNI_AUDIT_NO_MARKETING=1  same as --no-marketing
