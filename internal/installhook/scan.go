@@ -27,7 +27,7 @@ const (
 	// KindDecode is eval/exec/Function next to a base64 (or similar) decode.
 	KindDecode = "decode_exec"
 	// KindCredential is a credential path or token next to a network call.
-	KindCredential = "credential_exfil"
+	KindCredential = "credential_exfil" //nolint:gosec // G101: a risk label, not a credential
 	// KindNotInLockfile is an installed package the nearest lockfile does not name.
 	KindNotInLockfile = "not_in_lockfile"
 	// KindVersionMismatch is an installed version the nearest lockfile does not pin.
@@ -148,13 +148,13 @@ func MismatchMessage(installed string, locked map[string]struct{}) string {
 // ScanFile scans a source file. name is used only to pick the language and
 // whether the whole file is an install script (.pth, binding.gyp, shell).
 func ScanFile(name string, data []byte) []Hit {
-	return scanText(name, data, scriptFile(name), language(name))
+	return scanText(data, scriptFile(name), language(name))
 }
 
 // ScanScript scans one lifecycle-script body. The body is executed by the
 // package manager, so a shell token anywhere in it is a hit.
 func ScanScript(body string) []Hit {
-	return scanText("install-script.sh", []byte(body), true, langAny)
+	return scanText([]byte(body), true, langAny)
 }
 
 // ParsePackage reads name, version, and lifecycle scripts from package.json.
@@ -191,7 +191,7 @@ func ParsePackage(data []byte) (Package, error) {
 	return pkg, nil
 }
 
-func scanText(name string, data []byte, script bool, language lang) []Hit {
+func scanText(data []byte, script bool, language lang) []Hit {
 	if !utf8.Valid(data) {
 		data = []byte(strings.ToValidUTF8(string(data), ""))
 	}
@@ -290,8 +290,7 @@ func hit(kind string, line int) Hit {
 
 func scriptFile(name string) bool {
 	base := strings.ToLower(path.Base(name))
-	switch base {
-	case "binding.gyp":
+	if base == "binding.gyp" {
 		return true
 	}
 	switch path.Ext(base) {
