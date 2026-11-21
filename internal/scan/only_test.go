@@ -63,7 +63,7 @@ func TestRunNoUnclaimedMakesNoRegistryRequests(t *testing.T) {
 	if len(res.Warnings) != 0 {
 		t.Fatalf("unexpected warnings: %+v", res.Warnings)
 	}
-	want := []string{scan.ReasonMalicious, scan.ReasonShadowRegistry, scan.ReasonConfig}
+	want := []string{scan.ReasonMalicious, scan.ReasonShadowRegistry, scan.ReasonConfig, scan.ReasonInstallHook}
 	if !reflect.DeepEqual(res.Checks, want) {
 		t.Fatalf("checks = %v, want %v", res.Checks, want)
 	}

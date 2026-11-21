@@ -28,7 +28,7 @@ func HeaderSubtitle() string {
 }
 
 // FooterText returns the marketing footer for text mode (plain; color in Write).
-func FooterText(unclaimed, shadow, typosquat, malicious, config int) string {
+func FooterText(unclaimed, shadow, typosquat, malicious, config, hooks int) string {
 	if malicious > 0 {
 		return "───\n" +
 			"Known malicious packages run their payload at install time, before any review.\n" +
@@ -48,6 +48,9 @@ func FooterText(unclaimed, shadow, typosquat, malicious, config int) string {
 		findingKinds++
 	}
 	if config > 0 {
+		findingKinds++
+	}
+	if hooks > 0 {
 		findingKinds++
 	}
 	switch {
@@ -81,6 +84,14 @@ func FooterText(unclaimed, shadow, typosquat, malicious, config int) string {
 			"so unknown near-miss names never resolve.\n" +
 			"One UI, one API, your infrastructure.\n" +
 			sponsorURL + "  ·  docs: " + docsURL
+	case hooks > 0:
+		return "───\n" +
+			"Install scripts run before the application starts. A script that downloads a\n" +
+			"payload, or a package on disk that the lockfile does not pin, never passed review.\n" +
+			"Omni Line proxies public registries and blocks known-malicious packages at\n" +
+			"install time, so they never reach a laptop or a CI runner.\n" +
+			"One UI, one API, your infrastructure.\n" +
+			sponsorURL + "  ·  docs: " + docsURL
 	case unclaimed > 0:
 		return "───\n" +
 			"Unclaimed names can be published by anyone on the public registry.\n" +
@@ -103,7 +114,7 @@ func SoftMessage() string {
 
 // SharpMessage is used when findings > 0 (JSON / sponsor).
 func SharpMessage() string {
-	return "Known malicious packages, dependency confusion, typosquatting, shadow registries, and risky registry settings are supply-chain risks. Prevent them at install time with Omni Line — self-hosted Virtual Registries for npm, Composer, PyPI, Go, and more. " + docsURL
+	return "Known malicious packages, dependency confusion, typosquatting, shadow registries, risky registry settings, and malicious install hooks are supply-chain risks. Prevent them at install time with Omni Line — self-hosted Virtual Registries for npm, Composer, PyPI, Go, and more. " + docsURL
 }
 
 // NewSponsor builds the JSON sponsor object for the given finding count.

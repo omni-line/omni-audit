@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/omni-line/omni-audit/internal/installhook"
 	"github.com/omni-line/omni-audit/internal/scan"
 )
 
@@ -27,19 +28,19 @@ func writeText(stdout, stderr io.Writer, res *scan.Result, opts Options) {
 		fmt.Fprintln(mw)
 	}
 
-	unclaimed, shadow, typosquat, malicious, config := splitFindings(res.Findings)
+	unclaimed, shadow, typosquat, malicious, config, hooks := splitFindings(res.Findings)
 	if len(res.Findings) > 0 {
 		if !opts.Quiet {
-			writeFindingHeadlines(stdout, c, unclaimed, shadow, typosquat, malicious, config)
+			writeFindingHeadlines(stdout, c, unclaimed, shadow, typosquat, malicious, config, hooks)
 			fmt.Fprintln(stdout)
 		}
 		writeFindingsTable(stdout, c, res.Findings, opts.Verbose)
 		if !opts.Quiet {
-			writeGuidance(stdout, c, unclaimed, shadow, typosquat, malicious, config)
+			writeGuidance(stdout, c, unclaimed, shadow, typosquat, malicious, config, hooks)
 		}
 	} else if !opts.Quiet {
 		switch {
-		case res.Stats.Manifests == 0 && res.Stats.Lockfiles == 0 && res.Stats.ConfigFiles == 0 && res.Stats.Packages == 0:
+		case res.Stats.Manifests == 0 && res.Stats.Lockfiles == 0 && res.Stats.ConfigFiles == 0 && res.Stats.Packages == 0 && res.Stats.HookFiles == 0 && res.Stats.InstalledPackages == 0:
 			fmt.Fprintln(stdout, c.BoldYellow("! No supported dependency manifests or lockfiles found."))
 		case !res.Complete():
 			if nameCheck(res) {
@@ -71,11 +72,11 @@ func writeText(stdout, stderr io.Writer, res *scan.Result, opts Options) {
 
 	if showMarketing {
 		fmt.Fprintln(mw)
-		fmt.Fprintln(mw, colorFooter(mc, len(unclaimed), len(shadow), len(typosquat), len(malicious), len(config)))
+		fmt.Fprintln(mw, colorFooter(mc, len(unclaimed), len(shadow), len(typosquat), len(malicious), len(config), len(hooks)))
 	}
 }
 
-func writeFindingHeadlines(w io.Writer, c Palette, unclaimed, shadow, typosquat, malicious, config []scan.Finding) {
+func writeFindingHeadlines(w io.Writer, c Palette, unclaimed, shadow, typosquat, malicious, config, hooks []scan.Finding) {
 	if len(malicious) > 0 {
 		fmt.Fprintln(w, c.BoldRed(fmt.Sprintf("✗ %s found", plural(len(malicious), "known malicious package", "known malicious packages"))))
 	}
@@ -91,6 +92,9 @@ func writeFindingHeadlines(w io.Writer, c Palette, unclaimed, shadow, typosquat,
 	}
 	if len(config) > 0 {
 		fmt.Fprintln(w, c.BoldRed(fmt.Sprintf("✗ %s found", plural(len(config), "risky registry setting", "risky registry settings"))))
+	}
+	if len(hooks) > 0 {
+		fmt.Fprintln(w, c.BoldRed(fmt.Sprintf("✗ %s found", plural(len(hooks), "install-hook finding", "install-hook findings"))))
 	}
 }
 
@@ -179,7 +183,7 @@ func writeFindingsTable(w io.Writer, c Palette, findings []scan.Finding, verbose
 			if f.ResolvedURL != "" {
 				u = f.ResolvedURL
 			}
-			if (f.Reason == scan.ReasonTyposquat || f.Reason == scan.ReasonMalicious || f.Reason == scan.ReasonConfig) && f.Message != "" {
+			if (f.Reason == scan.ReasonTyposquat || f.Reason == scan.ReasonMalicious || f.Reason == scan.ReasonConfig || f.Reason == scan.ReasonInstallHook) && f.Message != "" {
 				fmt.Fprintf(w, "  %s %s\n", c.Dim("↳"), c.Dim(clean(f.Message)))
 			}
 			if u != "" {
@@ -192,7 +196,7 @@ func writeFindingsTable(w io.Writer, c Palette, findings []scan.Finding, verbose
 	}
 }
 
-func writeGuidance(w io.Writer, c Palette, unclaimed, shadow, typosquat, malicious, config []scan.Finding) {
+func writeGuidance(w io.Writer, c Palette, unclaimed, shadow, typosquat, malicious, config, hooks []scan.Finding) {
 	if len(malicious) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "These packages were published to a public registry as malware (OpenSSF MAL-")
@@ -218,6 +222,17 @@ func writeGuidance(w io.Writer, c Palette, unclaimed, shadow, typosquat, malicio
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "These package-manager settings let a public package replace an internal one,")
 		fmt.Fprintln(w, "expose a registry credential, or fetch packages without verified TLS.")
+	}
+	if hookScripts, hookDrift := splitHooks(hooks); hookScripts || hookDrift {
+		fmt.Fprintln(w)
+		if hookScripts {
+			fmt.Fprintln(w, "These install scripts download a payload, decode and execute code, or read")
+			fmt.Fprintln(w, "credentials. They run when the package is installed, before the application starts.")
+		}
+		if hookDrift {
+			fmt.Fprintln(w, "An installed package is missing from the lockfile, or is a different version")
+			fmt.Fprintln(w, "than the one the lockfile pins.")
+		}
 	}
 
 	type advice struct{ eco, text string }
@@ -248,6 +263,9 @@ func writeGuidance(w io.Writer, c Palette, unclaimed, shadow, typosquat, malicio
 		add("sources", scan.RemediationShadow)
 	}
 	for _, f := range config {
+		add(f.Kind, f.Remediation)
+	}
+	for _, f := range hooks {
 		add(f.Kind, f.Remediation)
 	}
 	if len(tips) == 0 {
@@ -324,6 +342,12 @@ func summaryLine(s scan.Stats) string {
 	if s.ConfigFiles > 0 {
 		parts[0] += " · " + plural(s.ConfigFiles, "config file", "config files")
 	}
+	if s.HookFiles > 0 {
+		parts[0] += " · " + plural(s.HookFiles, "hook file", "hook files")
+	}
+	if s.InstalledPackages > 0 {
+		parts[0] += " · " + plural(s.InstalledPackages, "installed package", "installed packages")
+	}
 	parts = append(parts,
 		packages,
 		plural(s.Findings, "finding", "findings"),
@@ -383,7 +407,7 @@ func severityStyle(c Palette) func(string) string {
 	}
 }
 
-func splitFindings(findings []scan.Finding) (unclaimed, shadow, typosquat, malicious, config []scan.Finding) {
+func splitFindings(findings []scan.Finding) (unclaimed, shadow, typosquat, malicious, config, hooks []scan.Finding) {
 	for _, f := range findings {
 		switch f.Reason {
 		case scan.ReasonShadowRegistry:
@@ -394,21 +418,35 @@ func splitFindings(findings []scan.Finding) (unclaimed, shadow, typosquat, malic
 			malicious = append(malicious, f)
 		case scan.ReasonConfig:
 			config = append(config, f)
+		case scan.ReasonInstallHook:
+			hooks = append(hooks, f)
 		default:
 			unclaimed = append(unclaimed, f)
 		}
 	}
-	return unclaimed, shadow, typosquat, malicious, config
+	return unclaimed, shadow, typosquat, malicious, config, hooks
 }
 
-func colorFooter(c Palette, unclaimed, shadow, typosquat, malicious, config int) string {
-	plain := FooterText(unclaimed, shadow, typosquat, malicious, config)
+func splitHooks(hooks []scan.Finding) (scripts, drift bool) {
+	for _, f := range hooks {
+		switch f.Kind {
+		case installhook.KindNotInLockfile, installhook.KindVersionMismatch:
+			drift = true
+		default:
+			scripts = true
+		}
+	}
+	return scripts, drift
+}
+
+func colorFooter(c Palette, unclaimed, shadow, typosquat, malicious, config, hooks int) string {
+	plain := FooterText(unclaimed, shadow, typosquat, malicious, config, hooks)
 	if !c.Enabled() {
 		return plain
 	}
 	lines := strings.Split(plain, "\n")
 	out := make([]string, 0, len(lines))
-	findingCount := unclaimed + shadow + typosquat + malicious + config
+	findingCount := unclaimed + shadow + typosquat + malicious + config + hooks
 	for i, line := range lines {
 		switch {
 		case i == 0 && strings.HasPrefix(line, "───"):
@@ -433,13 +471,14 @@ var checkNouns = map[string]string{
 	scan.ReasonTyposquat:      "typosquats",
 	scan.ReasonShadowRegistry: "unexpected package sources",
 	scan.ReasonConfig:         "risky registry settings",
+	scan.ReasonInstallHook:    "install hooks",
 }
 
 // cleanMessage says which checks found nothing, e.g. "No typosquats or
 // risky registry settings found." A nil checks list means every check ran.
 func cleanMessage(checks []string) string {
 	if checks == nil {
-		checks = []string{scan.ReasonMalicious, scan.ReasonUnclaimed, scan.ReasonTyposquat, scan.ReasonShadowRegistry, scan.ReasonConfig}
+		checks = []string{scan.ReasonMalicious, scan.ReasonUnclaimed, scan.ReasonTyposquat, scan.ReasonShadowRegistry, scan.ReasonConfig, scan.ReasonInstallHook}
 	}
 	var nouns []string
 	for _, c := range checks {

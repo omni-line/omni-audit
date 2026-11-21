@@ -99,11 +99,12 @@ func Check(ctx context.Context, eco ecosystem.Ecosystem, names []string, opts Op
 }
 
 // nameCheckReasons lists the checks a name lookup actually runs. Shadow
-// registry and registry-config audits need a tree, so they are omitted.
+// registry, registry-config, and install-hook audits need a tree, so they
+// are omitted.
 func nameCheckReasons(opts Options) []string {
 	out := []string{}
 	for _, reason := range enabledChecks(opts) {
-		if reason == ReasonShadowRegistry || reason == ReasonConfig {
+		if reason == ReasonShadowRegistry || reason == ReasonConfig || reason == ReasonInstallHook {
 			continue
 		}
 		out = append(out, reason)

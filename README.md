@@ -4,7 +4,7 @@
 [![CI](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml/badge.svg)](https://github.com/omni-line/omni-audit/actions/workflows/ci.yml)
 [![Powered by Omni Line](https://img.shields.io/badge/Powered%20by-Omni%20Line-FF4B4B?style=flat)](https://omniline.app/)
 
-**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion**, **typosquatting**, **known malicious packages**, **shadow registry** risk, and **risky registry settings**. It discovers NPM, Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub manifests, checks whether each declared name exists on the public registry, and reports names that are still **unclaimed**. It compares names to an embedded popular-package corpus for 1–2-edit near-misses, checks names and locked versions against the OpenSSF malicious-packages database, audits lockfile resolution URLs that pull from public registries instead of your internal proxy, and audits package-manager config files (`.npmrc`, `pip.conf`, `composer.json`, `Gemfile`, Dockerfiles, CI pipelines, …) for settings that let a public package replace an internal one.
+**Omni Audit** is a fast, zero-config CLI that scans your project for **dependency confusion**, **typosquatting**, **known malicious packages**, **shadow registry** risk, **risky registry settings**, and **install-time payloads**. It discovers NPM, Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub manifests, checks whether each declared name exists on the public registry, and reports names that are still **unclaimed**. It compares names to an embedded popular-package corpus for 1–2-edit near-misses, checks names and locked versions against the OpenSSF malicious-packages database, audits lockfile resolution URLs that pull from public registries instead of your internal proxy, and audits package-manager config files (`.npmrc`, `pip.conf`, `composer.json`, `Gemfile`, Dockerfiles, CI pipelines, …) for settings that let a public package replace an internal one.
 
 Distributed as a **standalone Go binary**. No Node or PHP runtime required.
 
@@ -148,6 +148,19 @@ https://omniline.app  ·  docs: https://omniline.app/docs
 7. Walks supported lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `poetry.lock`, `composer.lock`), extracts resolution URLs, and flags known public registry hosts (or any host outside `--expected-host`) as `reason=shadow_registry` — offline, no network
 8. Audits package-manager configuration files and reports risky settings as `reason=registry_config`, with the risk in `kind` (offline, no network; table below)
 9. Checks every lockfile resolution and every declared dependency against an embedded snapshot of [OpenSSF malicious-packages](https://github.com/ossf/malicious-packages) (`MAL-` advisories, via [mal-check](https://github.com/omni-line/mal-check)'s `pkg/maldb`) and reports matches as `reason=malicious`: `critical` when the locked version (or every version) is malware, `high` when only some versions are and the declaration is not pinned. Lockfile versions win over manifest ranges; clean versions of once-hijacked packages are not reported — offline, no network
+10. Audits install-time code already in the tree and reports it as `reason=install_hook` (offline, no network; nothing is executed). Project files are always scanned: npm lifecycle scripts (`preinstall`, `install`, `postinstall`, `prepare`, `prepublish`) and the one local file they invoke, plus `setup.py`, `*.pth`, and `binding.gyp`. A hit requires a payload pattern, not merely the presence of a script. `--installed` also walks `node_modules` and virtualenvs (`.venv`, `venv`, `site-packages`), which the default walk skips, and compares each installed npm package to the nearest `package-lock.json`, `npm-shrinkwrap.json`, or `yarn.lock`. Disable with `--no-install-hook`
+
+#### Install-hook patterns
+
+| `kind` | Severity | What it flags |
+| --- | --- | --- |
+| `shell_exec` | high | `curl`, `wget`, `certutil`, `bash -c` / `sh -c`, a pipe into a shell, PowerShell, or `cmd /c`, in a script that runs at install (or next to an exec API in a source file) |
+| `decode_exec` | high | `eval` / `exec` / `Function` next to `base64`, `atob`, or `Buffer.from` |
+| `credential_exfil` | high | a credential path (`.npmrc`, `.ssh`, `.aws`, `.env`, `id_rsa`) or a named token (`NPM_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `GITHUB_TOKEN`, …) next to a network call. `process.env` alone is not a credential |
+| `version_mismatch` | high | `--installed` only. The installed npm version is not the version in the nearest lockfile |
+| `not_in_lockfile` | high | `--installed` only. The installed npm package is not named by the nearest lockfile |
+
+Findings quote the pattern, never the script body. `--ignore` skips a package name; `--safe-namespace` does not, because a namespace you own can still ship a malicious install script. A bare lifecycle script (`node-gyp rebuild`, `husky`) is not a finding.
 
 #### Registry configuration checks
 
@@ -164,7 +177,7 @@ Secret values are never printed or written to JSON/SARIF; URLs are redacted (`ht
 
 ### Security properties
 
-- Only package names are sent, and only to the public registries above (HTTPS, TLS 1.2+, no HTTPS→HTTP redirects). Names that are not valid for the registry are never sent. Lockfile source auditing, typosquat, malicious-package, and registry configuration checks are offline (no network).
+- Only package names are sent, and only to the public registries above (HTTPS, TLS 1.2+, no HTTPS→HTTP redirects). Names that are not valid for the registry are never sent. Lockfile source auditing, typosquat, malicious-package, registry configuration, and install-hook checks are offline (no network). Install hooks are read, never executed.
 - Manifests and lockfiles are read with a 10 MiB cap; FIFOs/devices and symlinks that resolve outside the scan root are skipped.
 - Values from scanned files are escaped before being printed, so a crafted manifest cannot inject terminal escape sequences.
 - `HTTPS_PROXY` / `NO_PROXY` are honored for locked-down networks.
@@ -194,12 +207,14 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
 | `--allow` | Exact package names treated as safe for typosquat checks |
 | `--expected-host` | Internal registry hostname or URL; lockfile resolutions outside these hosts are findings (repeatable / comma-separated). Without this flag, only known public registry hosts are flagged. |
 | `--exclude` | Skip paths: directory/file names or globs relative to the scan root |
-| `--only` | Run only these checks: `unclaimed`, `shadow_registry`, `typosquat`, `malicious`, `registry_config` (repeatable / comma-separated; the same names as `reason`). `--only malicious,typosquat,registry_config` makes no network requests |
+| `--only` | Run only these checks: `unclaimed`, `shadow_registry`, `typosquat`, `malicious`, `registry_config`, `install_hook` (repeatable / comma-separated; the same names as `reason`). `--only malicious,typosquat,registry_config,install_hook` makes no network requests |
 | `--no-unclaimed` | Disable the public-registry checks for unclaimed names (the only check that uses the network) |
 | `--no-sources` | Disable the lockfile audit for resolutions outside the expected registry hosts (lockfiles are still read for the malicious-package check) |
 | `--no-typosquat` | Disable offline typosquat checks |
 | `--no-malicious` | Disable the offline known-malicious-package check |
 | `--no-registry-config` | Disable the offline audit of package-manager config files |
+| `--no-install-hook` | Disable the offline install-hook audit |
+| `--installed` | Also scan `node_modules` and virtualenvs for install hooks, and flag npm packages whose name or version is not in the nearest lockfile |
 | `--distance` | Maximum edit distance for typosquat matches (`1` or `2`, default `2`) |
 | `--scope` | Namespace to peer-check for typosquats (e.g. `@acme`; repeatable) |
 | `--no-scope-peers` | Disable automatic namespace peer typosquat checks |
@@ -246,7 +261,7 @@ Without `--strict`, registry failures and unreadable manifests are reported as w
 }
 ```
 
-`complete` is `false` when any warning was raised (see `warnings[]`, each with a `kind` of `walk`, `manifest`, `registry`, `namespace`, `lockfile`, or `config`). `checks` lists the checks that ran. `id` is the SARIF rule (`OA001` unclaimed, `OA002` shadow registry, `OA003` typosquat, `OA004` malicious, `OA005` registry config). `fingerprint` ignores the dependency version and line number, so `--baseline` still matches after a constraint bump in the same file. New fields may be added; breaking changes bump `schema_version`.
+`complete` is `false` when any warning was raised (see `warnings[]`, each with a `kind` of `walk`, `manifest`, `registry`, `namespace`, `lockfile`, `config`, or `installed`). `checks` lists the checks that ran. `id` is the SARIF rule (`OA001` unclaimed, `OA002` shadow registry, `OA003` typosquat, `OA004` malicious, `OA005` registry config, `OA006` install hook). `fingerprint` ignores the dependency version and line number, so `--baseline` still matches after a constraint bump in the same file. New fields may be added; breaking changes bump `schema_version`.
 
 ### For agents
 

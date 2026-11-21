@@ -20,6 +20,8 @@ func RuleID(reason string) string {
 		return RuleMalicious
 	case ReasonConfig:
 		return RuleConfig
+	case ReasonInstallHook:
+		return RuleInstallHook
 	default:
 		return RuleUnclaimed
 	}

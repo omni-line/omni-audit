@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/omni-line/omni-audit/internal/installhook"
 	"github.com/omni-line/omni-audit/internal/scan"
 )
 
@@ -13,14 +14,15 @@ import (
 // Only the subset of the schema that omni-audit populates is modeled.
 
 const (
-	sarifSchema        = "https://json.schemastore.org/sarif-2.1.0.json"
-	sarifRuleUnclaimed = scan.RuleUnclaimed
-	sarifRuleShadow    = scan.RuleShadowRegistry
-	sarifRuleTyposquat = scan.RuleTyposquat
-	sarifRuleMalicious = scan.RuleMalicious
-	sarifRuleRegConfig = scan.RuleConfig
-	toolInfoURI        = "https://github.com/omni-line/omni-audit"
-	fingerprintK       = "omniAudit/v1"
+	sarifSchema          = "https://json.schemastore.org/sarif-2.1.0.json"
+	sarifRuleUnclaimed   = scan.RuleUnclaimed
+	sarifRuleShadow      = scan.RuleShadowRegistry
+	sarifRuleTyposquat   = scan.RuleTyposquat
+	sarifRuleMalicious   = scan.RuleMalicious
+	sarifRuleRegConfig   = scan.RuleConfig
+	sarifRuleInstallHook = scan.RuleInstallHook
+	toolInfoURI          = "https://github.com/omni-line/omni-audit"
+	fingerprintK         = "omniAudit/v1"
 )
 
 type sarifLog struct {
@@ -110,7 +112,7 @@ func writeSARIF(w io.Writer, res *scan.Result, opts Options) error {
 				Name:           "omni-audit",
 				Version:        strings.TrimPrefix(opts.Version, "v"),
 				InformationURI: toolInfoURI,
-				Rules:          []sarifRule{unclaimedRule(), shadowRule(), typosquatRule(), maliciousRule(), configRule()},
+				Rules:          []sarifRule{unclaimedRule(), shadowRule(), typosquatRule(), maliciousRule(), configRule(), installHookRule()},
 			}},
 			Invocations: []sarifInvocation{invocation(res)},
 			Results:     make([]sarifResult, 0, len(res.Findings)),
@@ -257,6 +259,32 @@ func configRule() sarifRule {
 	}
 }
 
+func installHookRule() sarifRule {
+	return sarifRule{
+		ID:   sarifRuleInstallHook,
+		Name: "SuspiciousInstallHook",
+		ShortDescription: sarifText{
+			Text: "Install script looks like a payload, or an installed package disagrees with the lockfile",
+		},
+		FullDescription: sarifText{
+			Text: "An npm lifecycle script, the local file it runs, setup.py, a .pth file, or binding.gyp " +
+				"shells out to a downloader, decodes a payload and executes it, or reads credentials and " +
+				"opens a network connection. With --installed, an npm package on disk is also reported " +
+				"when its name or version is not in the nearest lockfile.",
+		},
+		Help: sarifText{
+			Text: installhook.Remediation(installhook.KindShell),
+		},
+		HelpURI:              toolInfoURI + "#readme",
+		DefaultConfiguration: sarifRuleConfig{Level: "error"},
+		Properties: map[string]any{
+			"tags":              []string{"security", "supply-chain", "malware", "install-script"},
+			"security-severity": "8.5",
+			"precision":         "high",
+		},
+	}
+}
+
 func invocation(res *scan.Result) sarifInvocation {
 	inv := sarifInvocation{ExecutionSuccessful: res.Complete()}
 	for _, wn := range res.Warnings {
@@ -288,6 +316,8 @@ func sarifFinding(f scan.Finding) sarifResult {
 		msg = f.Message + "."
 	case scan.ReasonConfig:
 		msg = fmt.Sprintf("%s setting %q: %s.", f.Ecosystem, f.Package, f.Message)
+	case scan.ReasonInstallHook:
+		msg = fmt.Sprintf("%s package %q: %s.", f.Ecosystem, f.Package, f.Message)
 	case scan.ReasonTyposquat:
 		switch {
 		case f.Message != "":

@@ -4,6 +4,7 @@ package scan
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -33,6 +34,10 @@ const (
 	// (extra indexes, non-canonical repositories, plaintext credentials,
 	// plain HTTP); Kind holds the regconfig risk.
 	ReasonConfig = "registry_config"
+	// ReasonInstallHook marks an install script that downloads a payload,
+	// decodes and executes code, or reads credentials, or an installed
+	// package that disagrees with the lockfile. Kind holds the pattern.
+	ReasonInstallHook = "install_hook"
 )
 
 // Finding severities. Additive JSON fields; default for unscoped names is high.
@@ -72,6 +77,7 @@ const (
 	RuleTyposquat      = "OA003"
 	RuleMalicious      = "OA004"
 	RuleConfig         = "OA005"
+	RuleInstallHook    = "OA006"
 )
 
 // Finding is a reportable audit risk (unclaimed name, unexpected source, or typosquat).
@@ -127,6 +133,12 @@ type Stats struct {
 	Lockfiles int `json:"lockfiles"`
 	// ConfigFiles is the number of package-manager configuration files audited.
 	ConfigFiles int `json:"config_files"`
+	// HookFiles is the number of project files inspected for install hooks
+	// (package.json lifecycle scripts, setup.py, .pth, binding.gyp).
+	HookFiles int `json:"hook_files,omitempty"`
+	// InstalledPackages is the number of installed packages inspected when
+	// --installed is set.
+	InstalledPackages int `json:"installed_packages,omitempty"`
 	// Packages counts dependency declarations across all manifests.
 	Packages int `json:"packages"`
 	// ResolvedPackages counts lockfile resolutions inspected for source policy.
@@ -188,6 +200,11 @@ type Options struct {
 	Malicious *maldb.DB
 	// NoConfig disables the offline package-manager configuration audit.
 	NoConfig bool
+	// NoInstallHook disables the offline install-hook audit.
+	NoInstallHook bool
+	// Installed also scans node_modules and virtualenvs, and compares
+	// installed npm packages to the nearest lockfile.
+	Installed bool
 	// ConfigFiles overrides the audited configuration formats; nil means
 	// regconfig.Default().
 	ConfigFiles []regconfig.File
@@ -346,8 +363,9 @@ func Run(ctx context.Context, root string, opts Options) (*Result, error) {
 	addRegistryWarnings(res, ordered)
 	addNamespaceWarnings(res, nsOrdered)
 
-	locked := auditLockfiles(root, opts, res)
+	locked, locks := auditLockfiles(root, opts, res)
 	auditConfig(root, opts, res)
+	auditInstallHooks(root, opts, locks, res)
 
 	if typos, err := auditTyposquats(opts, occs); err != nil {
 		return nil, err
@@ -458,6 +476,7 @@ func enabledChecks(opts Options) []string {
 		{ReasonTyposquat, opts.NoTyposquat},
 		{ReasonShadowRegistry, opts.NoSources},
 		{ReasonConfig, opts.NoConfig},
+		{ReasonInstallHook, opts.NoInstallHook},
 	} {
 		if !c.off {
 			out = append(out, c.reason)
@@ -475,14 +494,15 @@ func parse(eco *ecosystem.Ecosystem, m discover.Manifest) ([]manifest.Dependency
 }
 
 // auditLockfiles flags resolutions outside the expected hosts and returns
-// every resolution for the malicious-package audit.
-func auditLockfiles(root string, opts Options, res *Result) []lockedDep {
+// every resolution for the malicious-package audit, plus npm lock indexes
+// (directory → name → versions) for the installed-tree drift check.
+func auditLockfiles(root string, opts Options, res *Result) ([]lockedDep, []lockIndex) {
 	kinds := opts.Lockfiles
 	if kinds == nil {
 		kinds = lockfile.Default()
 	}
 	if len(kinds) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	walk, err := discover.Walk(root, discover.Options{
@@ -493,10 +513,12 @@ func auditLockfiles(root string, opts Options, res *Result) []lockedDep {
 	})
 	if err != nil {
 		res.Warnings = append(res.Warnings, Warning{Kind: WarnLockfile, Message: err.Error()})
-		return nil
+		return nil, nil
 	}
 	res.Stats.Lockfiles = len(walk.Manifests)
 	var locked []lockedDep
+	indexes := map[string]*lockIndex{}
+	var lockOrder []string
 	for _, p := range walk.Problems {
 		res.Warnings = append(res.Warnings, Warning{Kind: WarnWalk, Manifest: p.Path, Message: p.Err.Error()})
 	}
@@ -518,6 +540,11 @@ func auditLockfiles(root string, opts Options, res *Result) []lockedDep {
 		}
 		for _, d := range deps {
 			res.Stats.ResolvedPackages++
+			// Index before the allowlist skip so a safe namespace still counts
+			// as locked. Drift uses --ignore only, not --safe-namespace.
+			if opts.Installed && m.Ecosystem == "npm" {
+				addLockedVersion(indexes, &lockOrder, filepath.Dir(m.Path), d.Name, d.Version)
+			}
 			if allowlisted(opts, d.Name, d.Name) {
 				res.Stats.Skipped++
 				continue
@@ -547,7 +574,11 @@ func auditLockfiles(root string, opts Options, res *Result) []lockedDep {
 			})
 		}
 	}
-	return locked
+	locks := make([]lockIndex, 0, len(lockOrder))
+	for _, dir := range lockOrder {
+		locks = append(locks, *indexes[dir])
+	}
+	return locked, locks
 }
 
 // allowlisted matches both the declared and the normalized name so that

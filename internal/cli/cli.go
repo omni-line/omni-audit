@@ -67,6 +67,8 @@ type config struct {
 	noTyposquat   bool
 	noMalicious   bool
 	noConfig      bool
+	noInstallHook bool
+	installed     bool
 	maxDistance   int
 	allow         map[string]struct{}
 	scopes        []string
@@ -148,6 +150,8 @@ func scanOptions(cfg config, prober *registry.Prober) scan.Options {
 		NoTyposquat:    cfg.noTyposquat,
 		NoMalicious:    cfg.noMalicious,
 		NoConfig:       cfg.noConfig,
+		NoInstallHook:  cfg.noInstallHook,
+		Installed:      cfg.installed,
 		MaxDistance:    cfg.maxDistance,
 		Allow:          cfg.allow,
 		Scopes:         cfg.scopes,
@@ -200,37 +204,39 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 	fs.SetOutput(stderr)
 
 	var (
-		format       = fs.String("format", "text", "output format: text|json|sarif")
-		timeout      = fs.Duration("timeout", registry.DefaultTimeout, "per-request registry timeout")
-		concurrency  = fs.Int("concurrency", scan.DefaultConcurrency, fmt.Sprintf("parallel registry checks (1-%d)", maxConcurrency))
-		retries      = fs.Int("retries", registry.DefaultRetries, fmt.Sprintf("retries for transient registry errors (0-%d)", maxRetries))
-		failOn       = fs.String("fail-on", "any", "when to exit 1: any|none")
-		strict       = fs.Bool("strict", false, "exit 2 if any package or manifest could not be verified")
-		minSeverity  = fs.String("min-severity", "low", "minimum finding severity that fails the build: low|medium|high|critical")
-		colorMode    = fs.String("color", "auto", "color output: auto|always|never")
-		quiet        = fs.Bool("q", false, "findings only; suppress banner, warnings, summary, and marketing")
-		quietLong    = fs.Bool("quiet", false, "alias for -q")
-		noMarketing  = fs.Bool("no-marketing", false, "hide Omni Line CTA / JSON sponsor")
-		forceMarket  = fs.Bool("marketing", false, "force marketing even when non-TTY")
-		verbose      = fs.Bool("v", false, "verbose: show package URLs and all warnings")
-		verboseLong  = fs.Bool("verbose", false, "alias for -v")
-		versionFlag  = fs.Bool("version", false, "print version and exit")
-		noUnclaimed  = fs.Bool("no-unclaimed", false, "disable the public-registry checks for unclaimed names (the only check that uses the network)")
-		noSources    = fs.Bool("no-sources", false, "disable the lockfile audit for resolutions outside the expected registry hosts")
-		noTyposquat  = fs.Bool("no-typosquat", false, "disable offline typosquat checks against the popular-package corpus")
-		noMalicious  = fs.Bool("no-malicious", false, "disable the offline known-malicious-package check (OpenSSF MAL- advisories)")
-		noConfig     = fs.Bool("no-registry-config", false, "disable the offline audit of package-manager config files (.npmrc, pip.conf, composer.json, Gemfile, …)")
-		maxDistance  = fs.Int("distance", scan.DefaultTyposquatDistance, "maximum edit distance for typosquat matches (1 or 2)")
-		noScopePeers = fs.Bool("no-scope-peers", false, "disable automatic namespace peer typosquat checks")
-		agent        = fs.Bool("agent", false, "compact JSON for agents: no marketing, with decision, actions, id, and fingerprint")
-		baseline     = fs.String("baseline", "", "hide findings whose fingerprint is in this JSON report or {\"fingerprints\":[...]}")
-		safeNS       stringList
-		ignore       stringList
-		exclude      stringList
-		expectedHost stringList
-		allow        stringList
-		scopes       stringList
-		only         stringList
+		format        = fs.String("format", "text", "output format: text|json|sarif")
+		timeout       = fs.Duration("timeout", registry.DefaultTimeout, "per-request registry timeout")
+		concurrency   = fs.Int("concurrency", scan.DefaultConcurrency, fmt.Sprintf("parallel registry checks (1-%d)", maxConcurrency))
+		retries       = fs.Int("retries", registry.DefaultRetries, fmt.Sprintf("retries for transient registry errors (0-%d)", maxRetries))
+		failOn        = fs.String("fail-on", "any", "when to exit 1: any|none")
+		strict        = fs.Bool("strict", false, "exit 2 if any package or manifest could not be verified")
+		minSeverity   = fs.String("min-severity", "low", "minimum finding severity that fails the build: low|medium|high|critical")
+		colorMode     = fs.String("color", "auto", "color output: auto|always|never")
+		quiet         = fs.Bool("q", false, "findings only; suppress banner, warnings, summary, and marketing")
+		quietLong     = fs.Bool("quiet", false, "alias for -q")
+		noMarketing   = fs.Bool("no-marketing", false, "hide Omni Line CTA / JSON sponsor")
+		forceMarket   = fs.Bool("marketing", false, "force marketing even when non-TTY")
+		verbose       = fs.Bool("v", false, "verbose: show package URLs and all warnings")
+		verboseLong   = fs.Bool("verbose", false, "alias for -v")
+		versionFlag   = fs.Bool("version", false, "print version and exit")
+		noUnclaimed   = fs.Bool("no-unclaimed", false, "disable the public-registry checks for unclaimed names (the only check that uses the network)")
+		noSources     = fs.Bool("no-sources", false, "disable the lockfile audit for resolutions outside the expected registry hosts")
+		noTyposquat   = fs.Bool("no-typosquat", false, "disable offline typosquat checks against the popular-package corpus")
+		noMalicious   = fs.Bool("no-malicious", false, "disable the offline known-malicious-package check (OpenSSF MAL- advisories)")
+		noConfig      = fs.Bool("no-registry-config", false, "disable the offline audit of package-manager config files (.npmrc, pip.conf, composer.json, Gemfile, …)")
+		noInstallHook = fs.Bool("no-install-hook", false, "disable the offline install-hook audit (lifecycle scripts, setup.py, .pth, and, with --installed, lockfile drift)")
+		installed     = fs.Bool("installed", false, "also scan installed trees (node_modules, virtualenvs) for install hooks and npm lockfile drift")
+		maxDistance   = fs.Int("distance", scan.DefaultTyposquatDistance, "maximum edit distance for typosquat matches (1 or 2)")
+		noScopePeers  = fs.Bool("no-scope-peers", false, "disable automatic namespace peer typosquat checks")
+		agent         = fs.Bool("agent", false, "compact JSON for agents: no marketing, with decision, actions, id, and fingerprint")
+		baseline      = fs.String("baseline", "", "hide findings whose fingerprint is in this JSON report or {\"fingerprints\":[...]}")
+		safeNS        stringList
+		ignore        stringList
+		exclude       stringList
+		expectedHost  stringList
+		allow         stringList
+		scopes        stringList
+		only          stringList
 	)
 	fs.Var(&safeNS, "safe-namespace", "glob of namespaces you own; matching packages are skipped (repeatable or comma-separated)")
 	fs.Var(&ignore, "ignore", "package name globs to skip (repeatable or comma-separated)")
@@ -318,9 +324,11 @@ func parse(args []string, stderr io.Writer) (cfg config, showVersion bool, err e
 	cfg.noTyposquat = *noTyposquat
 	cfg.noMalicious = *noMalicious
 	cfg.noConfig = *noConfig
+	cfg.noInstallHook = *noInstallHook
+	cfg.installed = *installed
 	if len(only) > 0 {
-		if cfg.noUnclaimed || cfg.noSources || cfg.noTyposquat || cfg.noMalicious || cfg.noConfig {
-			return cfg, false, errors.New("--only cannot be combined with --no-unclaimed, --no-sources, --no-typosquat, --no-malicious, or --no-registry-config")
+		if cfg.noUnclaimed || cfg.noSources || cfg.noTyposquat || cfg.noMalicious || cfg.noConfig || cfg.noInstallHook {
+			return cfg, false, errors.New("--only cannot be combined with --no-unclaimed, --no-sources, --no-typosquat, --no-malicious, --no-registry-config, or --no-install-hook")
 		}
 		if err := cfg.applyOnly(only); err != nil {
 			return cfg, false, err
@@ -371,12 +379,14 @@ func usage(fs *flag.FlagSet, w io.Writer) {
 
 Scan a project tree (or a single manifest) for dependency confusion,
 typosquatted names, known malicious packages, unexpected lockfile package
-sources, and risky registry settings across npm, Composer, PyPI, Go, Cargo,
-RubyGems, Maven, Conan, and Docker Hub. Unclaimed public names, near-miss
-typos of popular packages, packages published as malware (OpenSSF MAL-
-advisories, checked offline), resolutions to public / non-proxy registries,
-and config that merges public and internal indexes, stores credentials in
-plain text, or disables TLS are reported as findings.
+sources, risky registry settings, and install-time payloads across npm,
+Composer, PyPI, Go, Cargo, RubyGems, Maven, Conan, and Docker Hub. Unclaimed
+public names, near-miss typos of popular packages, packages published as
+malware (OpenSSF MAL- advisories, checked offline), resolutions to public /
+non-proxy registries, config that merges public and internal indexes, stores
+credentials in plain text, or disables TLS, and install scripts that download
+a payload, decode and execute code, or read credentials are reported as
+findings. --installed also scans node_modules and virtualenvs.
 
 check looks up proposed package names without walking a tree. Use it before
 adding a dependency. --agent prints a compact JSON decision (allow, block, or
@@ -444,7 +454,7 @@ func envTruthy(key string) bool {
 }
 
 // checkNames are the --only values: the finding reasons, one per check.
-var checkNames = []string{scan.ReasonUnclaimed, scan.ReasonShadowRegistry, scan.ReasonTyposquat, scan.ReasonMalicious, scan.ReasonConfig}
+var checkNames = []string{scan.ReasonUnclaimed, scan.ReasonShadowRegistry, scan.ReasonTyposquat, scan.ReasonMalicious, scan.ReasonConfig, scan.ReasonInstallHook}
 
 // applyOnly disables every check not named in only.
 func (cfg *config) applyOnly(only []string) error {
@@ -465,5 +475,6 @@ func (cfg *config) applyOnly(only []string) error {
 	cfg.noTyposquat = !on[scan.ReasonTyposquat]
 	cfg.noMalicious = !on[scan.ReasonMalicious]
 	cfg.noConfig = !on[scan.ReasonConfig]
+	cfg.noInstallHook = !on[scan.ReasonInstallHook]
 	return nil
 }

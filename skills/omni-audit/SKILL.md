@@ -36,7 +36,7 @@ skill from a URL instead of an installed copy, fetch them from the same base:
    namespace once the first scan reports it `namespace_status: claimed`, or the user
    confirms they own it publicly. See [references/flags.md](references/flags.md).
 3. **Scan before you tune, tune before you gate.** Run a plain scan first, show the
-   findings, then propose flags. Never add `--fail-on none`, `--only`, `--no-unclaimed`, `--no-sources`, `--no-typosquat`, `--no-malicious`, `--no-registry-config`, or a
+   findings, then propose flags. Never add `--fail-on none`, `--only`, `--no-unclaimed`, `--no-sources`, `--no-typosquat`, `--no-malicious`, `--no-registry-config`, `--no-install-hook`, or a
    broad `--ignore` just to turn a red scan green.
 4. **Confirm before writing to the repository.** Show the CI diff and get a yes before
    editing workflow files. Never commit, push, or open a PR unless asked.
@@ -77,7 +77,7 @@ omni-audit --no-marketing --fail-on none   # human-readable table for the user
 ```
 
 Summarize findings by `reason` (`malicious`, `unclaimed`, `typosquat`, `shadow_registry`,
-`registry_config` with its `kind`) and
+`registry_config` with its `kind`, `install_hook` with its `kind`) and
 severity, and list `warnings[]` (an incomplete scan is not a clean scan). Then infer
 `--safe-namespace`, `--expected-host`, `--exclude`, and `--allow` candidates following
 [references/flags.md](references/flags.md), show each with its evidence, and rerun
@@ -90,6 +90,15 @@ that installed it should be treated as compromised (rotate the secrets it could 
 A `kind: plaintext_credential` finding means a registry token is in the repository:
 tell the user to rotate it (removing the line does not remove it from git history).
 Never print, copy, or paste the value; the report already redacts it.
+
+An `install_hook` finding with kind `shell_exec`, `decode_exec`, or `credential_exfil`
+means code that runs on install looks like a payload. Treat the machine that
+installed it as compromised: remove the package and reinstall from a trusted
+lockfile. Do not quote the script body. `version_mismatch` and `not_in_lockfile`
+mean `--installed` found a package on disk the lockfile does not pin; reinstall
+from the lockfile. Propose `--installed` when the repository has `node_modules`
+or a virtualenv and the user wants that tree checked. The default scan skips
+those directories.
 
 ## Before adding a dependency
 

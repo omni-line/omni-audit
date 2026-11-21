@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/omni-line/omni-audit/internal/installhook"
 	"github.com/omni-line/omni-audit/internal/regconfig"
 	"github.com/omni-line/omni-audit/internal/report"
 	"github.com/omni-line/omni-audit/internal/scan"
@@ -60,7 +61,7 @@ func TestTextIncludesMarketing(t *testing.T) {
 		"omniline.app/docs",
 		"Kept clean",
 		"safe place for your supply chain",
-		"✓ No known malicious packages, unclaimed names, typosquats, unexpected package sources, or risky registry settings found.",
+		"✓ No known malicious packages, unclaimed names, typosquats, unexpected package sources, risky registry settings, or install hooks found.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
@@ -513,7 +514,7 @@ func TestMaliciousFindingSARIF(t *testing.T) {
 	for _, r := range run.Tool.Driver.Rules {
 		rules = append(rules, r.ID)
 	}
-	if fmt.Sprint(rules) != "[OA001 OA002 OA003 OA004 OA005]" {
+	if fmt.Sprint(rules) != "[OA001 OA002 OA003 OA004 OA005 OA006]" {
 		t.Fatalf("rules = %v", rules)
 	}
 	r := run.Results[0]
@@ -580,8 +581,40 @@ func TestConfigFindingSARIF(t *testing.T) {
 	}
 }
 
+func TestInstallHookFindingText(t *testing.T) {
+	res := &scan.Result{
+		Findings: []scan.Finding{{
+			Ecosystem:   "npm",
+			Package:     "left-pad",
+			Version:     "9.9.9",
+			Manifest:    "node_modules/left-pad/package.json",
+			Line:        4,
+			Group:       "postinstall",
+			Kind:        installhook.KindShell,
+			Reason:      scan.ReasonInstallHook,
+			Severity:    scan.SeverityHigh,
+			Message:     installhook.Message(installhook.KindShell),
+			Remediation: installhook.Remediation(installhook.KindShell),
+		}},
+		Stats: scan.Stats{Manifests: 1, HookFiles: 1, Findings: 1},
+	}
+	out, _ := write(t, res, report.Options{Verbose: true, NoMarketing: true})
+	for _, want := range []string{
+		"✗ 1 install-hook finding found",
+		"install_hook",
+		"shell_exec",
+		"postinstall",
+		installhook.Message(installhook.KindShell),
+		"1 hook file",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
 func TestFooterMixedConfig(t *testing.T) {
-	if got := report.FooterText(1, 0, 0, 0, 1); !strings.Contains(got, "Unclaimed names, typosquats") {
+	if got := report.FooterText(1, 0, 0, 0, 1, 0); !strings.Contains(got, "Unclaimed names, typosquats") {
 		t.Fatalf("mixed footer = %q", got)
 	}
 }

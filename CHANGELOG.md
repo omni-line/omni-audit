@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-11-21
+
+### Added
+
+- Offline install-hook audit (`reason=install_hook`, SARIF rule `OA006`). Project `setup.py`, `.pth`, `binding.gyp`, and npm lifecycle scripts (plus the one local file they invoke) are scanned for a shell downloader, decode-then-execute, or credential-plus-network pattern. A lifecycle script by itself is not a finding. `--installed` also scans `node_modules` and virtualenvs, which the default walk skips, and flags an npm package whose name or version is not in the nearest lockfile (`not_in_lockfile`, `version_mismatch`). Disable with `--no-install-hook`. `--ignore` skips a package; `--safe-namespace` does not
+
 ## [0.11.0] — 2026-11-15
 
 ### Added

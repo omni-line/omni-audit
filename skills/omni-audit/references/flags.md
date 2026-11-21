@@ -54,6 +54,16 @@ Only for exact names the user confirms are intentional (an internal fork, a pack
 that is legitimately one edit from a popular name). Show the popular package it was
 matched against. If it looks like a typo, the fix is the manifest, not the flag.
 
+## `--installed` (install hooks in dependency trees)
+
+The default scan reads install scripts in the project (`setup.py`, `.pth`,
+`binding.gyp`, npm lifecycle scripts) and skips `node_modules`, `vendor`, and
+virtualenvs. Propose `--installed` when one of those trees is present and the
+user wants it checked: lifecycle payloads inside installed packages, and npm
+packages whose name or version is not in the nearest lockfile.
+
+Do not propose `--no-install-hook`.
+
 ## Noise controls
 
 - `--min-severity medium|high`: when low-severity scoped findings remain after claiming

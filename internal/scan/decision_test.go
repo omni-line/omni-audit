@@ -47,7 +47,7 @@ func TestFingerprintStableAndDistinct(t *testing.T) {
 	if scan.Fingerprint(a) == scan.Fingerprint(b) {
 		t.Fatal("reason is part of the fingerprint")
 	}
-	if scan.RuleID(scan.ReasonUnclaimed) != scan.RuleUnclaimed || scan.RuleID(scan.ReasonShadowRegistry) != scan.RuleShadowRegistry || scan.RuleID(scan.ReasonTyposquat) != scan.RuleTyposquat {
+	if scan.RuleID(scan.ReasonUnclaimed) != scan.RuleUnclaimed || scan.RuleID(scan.ReasonShadowRegistry) != scan.RuleShadowRegistry || scan.RuleID(scan.ReasonTyposquat) != scan.RuleTyposquat || scan.RuleID(scan.ReasonInstallHook) != scan.RuleInstallHook {
 		t.Fatal("rule ids drifted")
 	}
 	if scan.ReportPath("") != "" {
