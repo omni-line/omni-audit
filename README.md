@@ -8,6 +8,8 @@
 
 Distributed as a **standalone Go binary**. No Node or PHP runtime required.
 
+Every check, flag, and output field is documented in the [wiki](https://github.com/omni-line/omni-audit/wiki).
+
 ## The problem
 
 If your team uses private packages alongside public registries (npmjs.com, Packagist, PyPI, crates.io, Maven Central, and others), a build can resolve a **malicious public package** that reuses an internal name. Omni Audit flags unclaimed public names before they are hijacked.
